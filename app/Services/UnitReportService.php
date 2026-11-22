@@ -10,12 +10,18 @@ use App\Enums\RejectionReasonCode;
 use App\Enums\ReportStatus;
 use App\Enums\UserRole;
 use App\Exceptions\InvalidStateTransitionException;
+use App\Models\BudgetMilestone;
+use App\Models\BudgetSchedule;
 use App\Models\Report;
 use App\Models\User;
+use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class UnitReportService
 {
@@ -244,5 +250,166 @@ class UnitReportService
         $updated = $this->stateMachine->reroute($report, $admin, $targetUnitId, $newCategoryId, $note);
 
         return $updated->load(self::UNIT_RELATIONS);
+    }
+
+    /**
+     * Schedule report onto Track 2 (APBD Budget) with 7-weekday RKA document deadline (TR-05).
+     *
+     * @param  array<string, mixed>  $apbdData
+     */
+    public function scheduleApbd(
+        Report $report,
+        User $admin,
+        array $apbdData,
+        ?UploadedFile $documentProof = null,
+    ): Report {
+        $updated = $this->stateMachine->scheduleApbd($report, $admin, $apbdData, $documentProof);
+
+        return $updated->load(self::UNIT_RELATIONS);
+    }
+
+    /**
+     * Record a quarterly APBD milestone update, optionally upload RKA document/attachment,
+     * and clear is_milestone_overdue when obligations (BR-010..BR-012) are satisfied.
+     */
+    public function storeApbdMilestone(
+        Report $report,
+        User $admin,
+        string $quarterLabel,
+        string $progressNote,
+        ?UploadedFile $documentProof = null,
+        ?UploadedFile $attachment = null,
+    ): Report {
+        $writtenFiles = [];
+
+        try {
+            $updated = DB::transaction(function () use (
+                $report,
+                $admin,
+                $quarterLabel,
+                $progressNote,
+                $documentProof,
+                $attachment,
+                &$writtenFiles,
+            ): Report {
+                $locked = Report::query()->whereKey($report->id)->lockForUpdate()->firstOrFail();
+
+                if ($locked->status !== ReportStatus::BUDGET_SCHEDULED) {
+                    throw new InvalidStateTransitionException(
+                        'Milestone APBD hanya dapat ditambahkan saat tiket berstatus BUDGET_SCHEDULED.'
+                    );
+                }
+
+                $schedule = BudgetSchedule::query()->where('report_id', $locked->id)->lockForUpdate()->first();
+                if ($schedule === null) {
+                    throw new InvalidStateTransitionException('Data jadwal APBD tidak ditemukan untuk tiket ini.');
+                }
+
+                $now = CarbonImmutable::now('UTC');
+                $sanitizedNote = $this->sanitizer->sanitize($progressNote);
+                $cleanQuarter = trim($quarterLabel);
+
+                $scheduleUpdates = [
+                    'last_milestone_updated_at' => $now,
+                ];
+
+                if ($documentProof !== null) {
+                    $docPath = $this->stateMachine->storeApbdDocument($documentProof, 'document_proof');
+                    $writtenFiles[] = $docPath;
+                    $scheduleUpdates['document_proof_path'] = $docPath;
+                    $scheduleUpdates['document_uploaded_at'] = $now;
+                }
+
+                $attachmentPath = null;
+                if ($attachment !== null) {
+                    $attachmentPath = $this->stateMachine->storeApbdDocument($attachment, 'attachment');
+                    $writtenFiles[] = $attachmentPath;
+                }
+
+                $schedule->update($scheduleUpdates);
+                $schedule->refresh();
+
+                $milestone = BudgetMilestone::create([
+                    'budget_schedule_id' => $schedule->id,
+                    'updated_by_user_id' => $admin->id,
+                    'quarter_label' => $cleanQuarter,
+                    'progress_note' => $sanitizedNote,
+                    'attachment_path' => $attachmentPath,
+                    'created_at' => $now,
+                ]);
+
+                // Clear is_milestone_overdue when BR-010 (doc) and BR-012 (target quarter) obligations are met
+                $docFulfilled = $schedule->document_uploaded_at !== null
+                    || $schedule->document_due_at === null
+                    || $now->lte($schedule->document_due_at);
+                $quarterEndUtc = $this->resolveQuarterEndUtc((int) $schedule->fiscal_year, (string) $schedule->target_quarter);
+                $quarterFulfilled = $now->lte($quarterEndUtc);
+
+                if ($locked->is_milestone_overdue && $docFulfilled && $quarterFulfilled) {
+                    $locked->update(['is_milestone_overdue' => false]);
+                }
+
+                $this->auditLogger->log(
+                    actionType: AuditActionType::MILESTONE_UPDATED,
+                    report: $locked,
+                    actor: $admin,
+                    fromStatus: ReportStatus::BUDGET_SCHEDULED,
+                    toStatus: ReportStatus::BUDGET_SCHEDULED,
+                    note: $sanitizedNote,
+                    metadata: [
+                        'milestone_id' => $milestone->id,
+                        'quarter_label' => $cleanQuarter,
+                        'document_uploaded' => $documentProof !== null,
+                    ],
+                );
+
+                $this->notifier->notifyUsers(
+                    $this->notifier->getReporterAndWatcherIds($locked),
+                    NotificationType::REPORT_APBD_SCHEDULED,
+                    $locked,
+                    "Pembaruan milestone APBD ({$cleanQuarter}) untuk tiket {$locked->ticket_code}: {$sanitizedNote}"
+                );
+
+                return $locked->fresh();
+            });
+        } catch (Throwable $e) {
+            if ($writtenFiles !== []) {
+                Storage::disk('public')->delete($writtenFiles);
+            }
+
+            throw $e;
+        }
+
+        return $updated->load(self::UNIT_RELATIONS);
+    }
+
+    /**
+     * Start field execution of an APBD-scheduled report (TR-06 -> IN_PROGRESS).
+     */
+    public function startApbdExecution(
+        Report $report,
+        User $admin,
+        string $targetDate,
+        int $officerId,
+        ?string $note = null,
+    ): Report {
+        $officer = User::query()->findOrFail($officerId);
+        $updated = $this->stateMachine->startApbdExecution($report, $admin, $targetDate, $officer, $note);
+
+        return $updated->load(self::UNIT_RELATIONS);
+    }
+
+    private function resolveQuarterEndUtc(int $fiscalYear, string $targetQuarter): CarbonImmutable
+    {
+        $endMonth = match (strtoupper($targetQuarter)) {
+            'Q1' => 3,
+            'Q2' => 6,
+            'Q3' => 9,
+            default => 12,
+        };
+
+        return CarbonImmutable::create($fiscalYear, $endMonth, 1, 0, 0, 0, 'Asia/Jakarta')
+            ->endOfMonth()
+            ->utc();
     }
 }

@@ -1067,14 +1067,14 @@ class ReportStateMachineService
         return $segment;
     }
 
-    private function storeApbdDocument(UploadedFile $file): string
+    public function storeApbdDocument(UploadedFile $file, string $field = 'document_proof'): string
     {
         $realPath = $file->getRealPath() ?: $file->getPathname();
         $rawContents = $realPath !== '' ? @file_get_contents($realPath) : false;
 
         if ($rawContents === false || $rawContents === '') {
             throw ValidationException::withMessages([
-                'document_proof' => ['Berkas dokumen bukti usulan APBD tidak dapat dibaca atau kosong.'],
+                $field => ['Berkas dokumen bukti usulan APBD tidak dapat dibaca atau kosong.'],
             ]);
         }
 
@@ -1084,7 +1084,7 @@ class ReportStateMachineService
         if ($detectedMime === 'application/pdf') {
             if (! str_starts_with($rawContents, '%PDF-')) {
                 throw ValidationException::withMessages([
-                    'document_proof' => ['Berkas PDF tidak valid atau rusak.'],
+                    $field => ['Berkas PDF tidak valid atau rusak.'],
                 ]);
             }
 
@@ -1111,7 +1111,7 @@ class ReportStateMachineService
         }
 
         throw ValidationException::withMessages([
-            'document_proof' => ['Dokumen bukti usulan APBD hanya boleh berupa PDF, JPG, atau PNG yang valid.'],
+            $field => ['Dokumen bukti usulan APBD hanya boleh berupa PDF, JPG, atau PNG yang valid.'],
         ]);
     }
 }

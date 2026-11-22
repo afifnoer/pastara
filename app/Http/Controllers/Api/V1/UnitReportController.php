@@ -10,6 +10,9 @@ use App\Http\Requests\Unit\AssignOfficerRequest;
 use App\Http\Requests\Unit\ReassignOfficerRequest;
 use App\Http\Requests\Unit\RejectReportRequest;
 use App\Http\Requests\Unit\RerouteReportRequest;
+use App\Http\Requests\Unit\ScheduleApbdRequest;
+use App\Http\Requests\Unit\StartExecutionRequest;
+use App\Http\Requests\Unit\StoreMilestoneRequest;
 use App\Http\Requests\Unit\UnitReportsRequest;
 use App\Http\Resources\UnitReportResource;
 use App\Models\Report;
@@ -118,6 +121,56 @@ class UnitReportController extends Controller
             (int) $validated['target_opd_unit_id'],
             isset($validated['new_category_id']) ? (int) $validated['new_category_id'] : null,
             (string) $validated['note'],
+        );
+
+        return ApiResponse::success(new UnitReportResource($updated));
+    }
+
+    public function scheduleApbd(ScheduleApbdRequest $request, Report $report): JsonResponse
+    {
+        /** @var User $admin */
+        $admin = $request->user();
+
+        $updated = $this->unitService->scheduleApbd(
+            $report,
+            $admin,
+            $request->validated(),
+            $request->file('document_proof'),
+        );
+
+        return ApiResponse::success(new UnitReportResource($updated));
+    }
+
+    public function storeMilestone(StoreMilestoneRequest $request, Report $report): JsonResponse
+    {
+        /** @var User $admin */
+        $admin = $request->user();
+        $validated = $request->validated();
+
+        $updated = $this->unitService->storeApbdMilestone(
+            $report,
+            $admin,
+            (string) $validated['quarter_label'],
+            (string) $validated['progress_note'],
+            $request->file('document_proof'),
+            $request->file('attachment'),
+        );
+
+        return ApiResponse::success(new UnitReportResource($updated), status: 201);
+    }
+
+    public function startExecution(StartExecutionRequest $request, Report $report): JsonResponse
+    {
+        /** @var User $admin */
+        $admin = $request->user();
+        $validated = $request->validated();
+
+        $updated = $this->unitService->startApbdExecution(
+            $report,
+            $admin,
+            (string) $validated['execution_target_date'],
+            (int) $validated['officer_id'],
+            $validated['note'] ?? null,
         );
 
         return ApiResponse::success(new UnitReportResource($updated));

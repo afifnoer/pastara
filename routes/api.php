@@ -65,6 +65,9 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/reports/{report}', [UnitReportController::class, 'show'])->whereNumber('report');
         Route::get('/officers', [UnitReportController::class, 'officers']);
         Route::post('/reports/{report}/assign', [UnitReportController::class, 'assign'])->whereNumber('report');
+        Route::post('/reports/{report}/schedule-apbd', [UnitReportController::class, 'scheduleApbd'])->whereNumber('report');
+        Route::post('/reports/{report}/apbd-milestones', [UnitReportController::class, 'storeMilestone'])->whereNumber('report');
+        Route::post('/reports/{report}/start-execution', [UnitReportController::class, 'startExecution'])->whereNumber('report');
         Route::patch('/reports/{report}/reassign-officer', [UnitReportController::class, 'reassignOfficer'])->whereNumber('report');
         Route::post('/reports/{report}/reject', [UnitReportController::class, 'reject'])->whereNumber('report');
         Route::post('/reports/{report}/reroute', [UnitReportController::class, 'reroute'])->whereNumber('report');
