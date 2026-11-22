@@ -98,7 +98,15 @@ it('shows public report detail for non-secret tickets and returns 404 for secret
     $publicDetail->assertStatus(200)
         ->assertJsonPath('success', true)
         ->assertJsonPath('data.ticket_code', 'PST-ESCROW01')
-        ->assertJsonPath('data.status', ReportStatus::PENDING_CITIZEN_SIGN_OFF->value);
+        ->assertJsonPath('data.status', ReportStatus::PENDING_CITIZEN_SIGN_OFF->value)
+        ->assertJsonPath('data.reporter.name', 'W***a P. U.')
+        ->assertJsonMissingPath('data.reporter.email')
+        ->assertJsonMissingPath('data.reporter.phone')
+        ->assertJsonPath('data.assigned_officer.role_label', 'Petugas Lapangan')
+        ->assertJsonCount(1, 'data.photos_by_cycle.0.before')
+        ->assertJsonCount(1, 'data.photos_by_cycle.0.after')
+        ->assertJsonStructure(['data' => ['sla', 'signoff', 'geotag', 'audit_timeline']]);
+    expect($publicDetail->getContent())->not->toContain('secret_token_hash');
 
     $apbdDetail = $this->getJson('/api/v1/public/reports/PST-SADA2027');
     $apbdDetail->assertStatus(200)
@@ -185,7 +193,10 @@ it('tracks public and secret tickets safely without leaking reporter identity an
         ->assertJsonPath('data.report.reporter.name', 'Pelapor Rahasia');
 
     $rawJson = $validTrack->getContent();
-    expect($rawJson)->not->toContain((string) $secretReport->reporter?->email);
+    expect($rawJson)->not->toContain((string) $secretReport->reporter?->email)
+        ->and($rawJson)->not->toContain((string) $secretReport->reporter?->name)
+        ->and($rawJson)->not->toContain((string) $secretReport->reporter?->phone)
+        ->and($rawJson)->not->toContain((string) $secretReport->secret_token_hash);
 
     // 5. Rate limiter blocks 11th request from same IP within 1 minute
     for ($i = 1; $i <= 10; $i++) {
@@ -253,16 +264,18 @@ it('returns honest global summary separating APBD scheduled from verified physic
         ->and($dpupr['physical_closed_count'])->toBe($dpuprPhysicalClosedCount)
         ->and(array_key_exists('secret_count', $dpupr))->toBeFalse();
 
-    // Verify period query filters work accurately
-    $currentJakarta = CarbonImmutable::now('Asia/Jakarta');
-    $currentMonthResponse = $this->getJson('/api/v1/public/scorecard?'.http_build_query([
-        'month' => $currentJakarta->month,
-        'year' => $currentJakarta->year,
-    ]));
-    $currentMonthResponse->assertStatus(200)
-        ->assertJsonPath('data.period.month', $currentJakarta->month)
-        ->assertJsonPath('data.period.year', $currentJakarta->year);
-    expect($currentMonthResponse->json('data.summary.total_reports'))->toBeLessThanOrEqual($expectedTotal);
+    // Verify period query filters deterministically against exact DB count
+    CarbonImmutable::setTestNow(CarbonImmutable::parse('2026-11-22 06:00:00', 'UTC'));
+    $novStartUtc = CarbonImmutable::create(2026, 11, 1, 0, 0, 0, 'Asia/Jakarta')->startOfMonth()->utc();
+    $novEndUtc = CarbonImmutable::create(2026, 11, 1, 0, 0, 0, 'Asia/Jakarta')->endOfMonth()->utc();
+    $expectedNovCount = Report::query()->whereBetween('created_at', [$novStartUtc, $novEndUtc])->count();
+
+    $novResponse = $this->getJson('/api/v1/public/scorecard?month=11&year=2026');
+    $novResponse->assertStatus(200)
+        ->assertJsonPath('data.period.month', 11)
+        ->assertJsonPath('data.period.year', 2026)
+        ->assertJsonPath('data.summary.total_reports', $expectedNovCount);
+    CarbonImmutable::setTestNow();
 
     $emptyFuture = $this->getJson('/api/v1/public/scorecard?month=12&year=2029');
     $emptyFuture->assertStatus(200)

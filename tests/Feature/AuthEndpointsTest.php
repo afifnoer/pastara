@@ -147,3 +147,41 @@ it('supports /auth/me with unread count, profile update without role escalation,
         ->getJson('/api/v1/auth/me')
         ->assertStatus(401);
 });
+
+it('rejects wrong password on active user, expires Sanctum tokens after 24 hours, and hashes registered passwords (TC-F-02, TC-SEC-11, AC-001)', function (): void {
+    $this->seed(CilacapSimulationSeeder::class);
+
+    // Active user with wrong password returns uniform 401
+    $this->postJson('/api/v1/auth/login', [
+        'email' => 'admin.dpupr@pastara.id',
+        'password' => 'PasswordSalah999!',
+    ])->assertStatus(401)
+        ->assertJsonPath('error.code', 'UNAUTHENTICATED')
+        ->assertJsonPath('error.message', 'Email atau password salah.');
+
+    // Registered password is stored hashed and issued token works on /auth/me then expires after 24h
+    $reg = $this->postJson('/api/v1/auth/register', [
+        'name' => 'Warga Expiry',
+        'email' => 'warga.expiry@pastara.id',
+        'password' => 'Pastara2027!',
+        'password_confirmation' => 'Pastara2027!',
+    ])->assertStatus(201);
+
+    $createdUser = User::where('email', 'warga.expiry@pastara.id')->firstOrFail();
+    expect($createdUser->password)->not->toBe('Pastara2027!')
+        ->and(Hash::check('Pastara2027!', $createdUser->password))->toBeTrue();
+
+    $token = (string) $reg->json('data.token');
+    $this->withHeader('Authorization', "Bearer {$token}")
+        ->getJson('/api/v1/auth/me')
+        ->assertStatus(200);
+
+    // Advance clock past 24 hours (1440 minutes) -> token expired (401)
+    $this->travel(25)->hours();
+    app('auth')->forgetGuards();
+
+    $this->withHeader('Authorization', "Bearer {$token}")
+        ->getJson('/api/v1/auth/me')
+        ->assertStatus(401)
+        ->assertJsonPath('error.code', 'UNAUTHENTICATED');
+});

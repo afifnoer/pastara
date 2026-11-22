@@ -159,7 +159,7 @@ abstract class BaseReportResource extends JsonResource
 
         $trimmed = trim($phone);
         $len = strlen($trimmed);
-        if ($len <= 6) {
+        if ($len <= 7) {
             return str_repeat('*', $len);
         }
 

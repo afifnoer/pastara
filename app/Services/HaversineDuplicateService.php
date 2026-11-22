@@ -8,6 +8,7 @@ use App\Enums\PhotoType;
 use App\Enums\ReportStatus;
 use App\Models\Category;
 use App\Models\ReportPhoto;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
@@ -71,7 +72,7 @@ class HaversineDuplicateService
               AND r.latitude BETWEEN (o.lat - 0.01) AND (o.lat + 0.01)
               AND r.longitude BETWEEN (o.lng - 0.01) AND (o.lng + 0.01)
               AND ({$haversineExpr}) <= :radius_m
-            ORDER BY distance_m ASC
+            ORDER BY distance_m ASC, r.created_at DESC, r.id DESC
             LIMIT 5
         SQL;
 
@@ -120,7 +121,7 @@ class HaversineDuplicateService
                 'longitude' => (float) $row->longitude,
                 'distance_m' => (int) $row->distance_m,
                 'thumbnail_url' => $thumbPath !== null ? Storage::disk('public')->url($thumbPath) : null,
-                'created_at' => (string) $row->created_at,
+                'created_at' => CarbonImmutable::parse((string) $row->created_at)->utc()->toIso8601ZuluString(),
             ];
         }
 

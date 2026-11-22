@@ -60,6 +60,11 @@ class CilacapSimulationSeeder extends Seeder
     public function run(): void
     {
         $this->ensureDummyMediaFiles();
+
+        if (Report::query()->where('ticket_code', 'PST-SADA2027')->exists()) {
+            return;
+        }
+
         $this->seedOpdUnits();
         $this->seedCategories();
         $this->seedLocations();
@@ -94,6 +99,11 @@ class CilacapSimulationSeeder extends Seeder
                 'file' => $filePath,
                 'thumb' => $thumbPath,
             ];
+        }
+
+        $apbdSamplePath = 'documents/2026/11/rka-dpupr-sadabumi-2027.pdf';
+        if (! $disk->exists($apbdSamplePath)) {
+            $disk->put($apbdSamplePath, "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n");
         }
     }
 
@@ -668,7 +678,10 @@ class CilacapSimulationSeeder extends Seeder
 
             $slaStarted = $track === ResolutionTrack::OPERATIONAL ? $createdAt->addHours(2) : null;
             $slaDeadline = $slaStarted?->addHours($slaHours);
-            if ($isOverdue && $slaStarted !== null) {
+            if ($slaStarted !== null && $status === ReportStatus::IN_PROGRESS && ! $isOverdue) {
+                $slaStarted = $now->subHours((int) max(4, floor($slaHours * 0.25)));
+                $slaDeadline = $slaStarted->addHours($slaHours);
+            } elseif ($isOverdue && $slaStarted !== null) {
                 $slaStarted = $now->subHours($slaHours + 12);
                 $slaDeadline = $now->subHours(6);
             }
@@ -722,6 +735,11 @@ class CilacapSimulationSeeder extends Seeder
             }
 
             if ($status === ReportStatus::BUDGET_SCHEDULED) {
+                $unitAdmin = User::query()
+                    ->where('opd_unit_id', $unit->id)
+                    ->where('role', UserRole::ADMIN_UNIT)
+                    ->first() ?? $this->users['admin.dpupr@pastara.id'];
+
                 BudgetSchedule::create([
                     'report_id' => $report->id,
                     'fiscal_year' => 2027,
@@ -730,7 +748,7 @@ class CilacapSimulationSeeder extends Seeder
                     'estimated_budget' => 250000000.00,
                     'document_due_at' => $report->is_milestone_overdue ? $now->subDays(2) : $now->addDays(5),
                     'last_milestone_updated_at' => $now->subDays(10),
-                    'created_by_user_id' => $this->users['admin.dpupr@pastara.id']->id,
+                    'created_by_user_id' => $unitAdmin->id,
                 ]);
             }
 
@@ -757,7 +775,7 @@ class CilacapSimulationSeeder extends Seeder
                 ]);
             }
 
-            if (in_array($status, [ReportStatus::VERIFIED_CLOSED, ReportStatus::AUTO_VERIFIED_CLOSED], true)) {
+            if ($status === ReportStatus::VERIFIED_CLOSED) {
                 Rating::create([
                     'report_id' => $report->id,
                     'user_id' => $reporter->id,

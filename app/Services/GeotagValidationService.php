@@ -97,10 +97,15 @@ class GeotagValidationService
         $image->scaleDown(width: self::MAX_IMAGE_WIDTH, height: self::MAX_IMAGE_WIDTH);
 
         $cleanBinary = (string) $image->encode(new WebpEncoder(quality: 85, strip: true));
-        Storage::disk('public')->put($filePath, $cleanBinary);
+        if (! Storage::disk('public')->put($filePath, $cleanBinary)) {
+            throw new \RuntimeException('Gagal menyimpan foto laporan ke penyimpanan.');
+        }
 
         $thumbBinary = $this->encodeThumbnailWithinLimit(clone $image);
-        Storage::disk('public')->put($thumbPath, $thumbBinary);
+        if (! Storage::disk('public')->put($thumbPath, $thumbBinary)) {
+            Storage::disk('public')->delete($filePath);
+            throw new \RuntimeException('Gagal menyimpan thumbnail foto laporan ke penyimpanan.');
+        }
 
         return ReportPhoto::create([
             'report_id' => $report->id,

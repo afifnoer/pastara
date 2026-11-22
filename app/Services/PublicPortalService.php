@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Enums\PhotoType;
 use App\Enums\ReportStatus;
 use App\Models\Category;
 use App\Models\District;
@@ -95,6 +96,23 @@ class PublicPortalService
     public function getMapMarkers(array $filters): array
     {
         $query = Report::query()
+            ->select([
+                'id',
+                'ticket_code',
+                'title',
+                'status',
+                'latitude',
+                'longitude',
+                'upvote_count',
+                'sla_cycle_started_at',
+                'sla_paused_at',
+                'sla_deadline_at',
+                'is_sla_overdue',
+                'is_milestone_overdue',
+                'category_id',
+                'opd_unit_id',
+                'created_at',
+            ])
             ->with([
                 'category:id,code,name,issue_type',
                 'opdUnit:id,code,name',
@@ -114,6 +132,7 @@ class PublicPortalService
 
         return $query
             ->orderByDesc('created_at')
+            ->limit(1000)
             ->get()
             ->map(function (Report $report): array {
                 return [
@@ -156,7 +175,15 @@ class PublicPortalService
     public function browseReports(array $filters): LengthAwarePaginator
     {
         $query = Report::query()
-            ->with(['category', 'opdUnit', 'district', 'village', 'photos'])
+            ->with([
+                'category',
+                'opdUnit',
+                'district',
+                'village',
+                'photos' => static fn ($q) => $q
+                    ->where('photo_type', PhotoType::BEFORE)
+                    ->select(['id', 'report_id', 'photo_type', 'cycle', 'sequence', 'thumbnail_path']),
+            ])
             ->where('is_secret', false);
 
         $this->applyPublicFilters($query, $filters);
@@ -164,7 +191,11 @@ class PublicPortalService
         $sort = (string) ($filters['sort'] ?? 'latest');
         match ($sort) {
             'upvotes' => $query->orderByDesc('upvote_count')->orderByDesc('created_at')->orderByDesc('id'),
-            'sla' => $query->orderByDesc('is_sla_overdue')
+            'sla' => $query->orderByRaw(
+                'CASE WHEN status IN (?, ?) THEN 0 ELSE 1 END ASC',
+                [ReportStatus::IN_PROGRESS->value, ReportStatus::REOPENED_BY_AUDIT->value]
+            )
+                ->orderByDesc('is_sla_overdue')
                 ->orderByRaw('sla_deadline_at IS NULL ASC')
                 ->orderBy('sla_deadline_at')
                 ->orderByDesc('created_at'),
@@ -333,7 +364,12 @@ class PublicPortalService
         }
 
         if (filter_var($filters['overdue_only'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
-            $query->where(function (Builder $sub): void {
+            $query->whereNotIn('status', [
+                ReportStatus::REJECTED->value,
+                ReportStatus::VERIFIED_CLOSED->value,
+                ReportStatus::AUTO_VERIFIED_CLOSED->value,
+                ReportStatus::CLOSED_BY_AUDIT->value,
+            ])->where(function (Builder $sub): void {
                 $sub->where('is_sla_overdue', true)
                     ->orWhere('is_milestone_overdue', true);
             });
