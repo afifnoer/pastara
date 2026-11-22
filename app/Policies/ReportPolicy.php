@@ -21,7 +21,11 @@ class ReportPolicy
 
     public function viewCitizen(User $user, Report $report): Response
     {
-        $isOwner = $user->role === UserRole::WARGA && (int) $user->id === (int) $report->reporter_id;
+        if (! $user->is_active || $user->role !== UserRole::WARGA) {
+            return Response::deny('Hanya akun warga aktif yang dapat mengakses tampilan warga.');
+        }
+
+        $isOwner = (int) $user->id === (int) $report->reporter_id;
 
         return ($isOwner || ! $report->is_secret)
             ? Response::allow()
@@ -100,7 +104,8 @@ class ReportPolicy
 
     public function upvote(User $user, Report $report): Response
     {
-        $allowed = $user->role === UserRole::WARGA
+        $allowed = $user->is_active
+            && $user->role === UserRole::WARGA
             && ! $report->is_secret
             && (int) $report->reporter_id !== (int) $user->id
             && ! $report->status->isFinal();
@@ -110,6 +115,12 @@ class ReportPolicy
             : Response::deny('Anda tidak diizinkan memberi dukungan pada laporan ini.');
     }
 
+    /**
+     * Authorize citizen sign-off (owner Bearer or secret_token).
+     * Note: For internal-role approve attempts, controllers MUST invoke
+     * ReportStateMachineService::guardUnilateralClose() first so Hukum 1
+     * emits ESCROW_LOCK_VIOLATION rather than generic FORBIDDEN.
+     */
     public function signOff(?User $user, Report $report, ?string $secretToken = null): Response
     {
         if (! $this->isSignOffActorAuthorized($user, $report, $secretToken)) {
@@ -117,7 +128,8 @@ class ReportPolicy
         }
 
         $withinWindow = $report->status === ReportStatus::PENDING_CITIZEN_SIGN_OFF
-            && ($report->signoff_deadline_at === null || now('UTC')->lte($report->signoff_deadline_at));
+            && $report->signoff_deadline_at !== null
+            && now('UTC')->lte($report->signoff_deadline_at);
 
         return $withinWindow
             ? Response::allow()
@@ -137,7 +149,7 @@ class ReportPolicy
 
     private function isSignOffActorAuthorized(?User $user, Report $report, ?string $secretToken): bool
     {
-        if ($user !== null && $user->role === UserRole::WARGA && (int) $user->id === (int) $report->reporter_id) {
+        if ($user !== null && $user->is_active && $user->role === UserRole::WARGA && (int) $user->id === (int) $report->reporter_id) {
             return true;
         }
 

@@ -50,7 +50,9 @@ return [
     |
     */
 
-    'expiration' => env('SANCTUM_TOKEN_EXPIRATION_MINUTES') !== null ? (int) env('SANCTUM_TOKEN_EXPIRATION_MINUTES') : 1440,
+    'expiration' => is_numeric(env('SANCTUM_TOKEN_EXPIRATION_MINUTES')) && (int) env('SANCTUM_TOKEN_EXPIRATION_MINUTES') > 0
+        ? (int) env('SANCTUM_TOKEN_EXPIRATION_MINUTES')
+        : 1440,
 
     /*
     |--------------------------------------------------------------------------

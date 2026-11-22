@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use RuntimeException;
 
 class Report extends Model
 {
@@ -107,7 +108,12 @@ class Report extends Model
 
     public static function hashSecretToken(string $plainToken): string
     {
-        return hash_hmac('sha256', trim($plainToken), (string) config('app.key'));
+        $key = (string) config('app.key');
+        if (trim($key) === '') {
+            throw new RuntimeException('APP_KEY wajib dikonfigurasi sebelum memproses token rahasia.');
+        }
+
+        return hash_hmac('sha256', trim($plainToken), $key);
     }
 
     public function verifySecretToken(?string $plainToken): bool

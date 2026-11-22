@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace App\Http\Resources;
 
 use App\Models\Report;
+use Illuminate\Http\Request;
 
 class PublicReportResource extends BaseReportResource
 {
-    protected function formatReporter(Report $report): ?array
+    protected function formatReporter(Report $report, Request $request): ?array
     {
         if ($report->is_secret) {
             return [

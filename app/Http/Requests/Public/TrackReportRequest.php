@@ -15,9 +15,17 @@ class TrackReportRequest extends FormRequest
 
     protected function prepareForValidation(): void
     {
-        if ($this->has('ticket_code')) {
+        $rawCode = $this->input('ticket_code');
+        if (is_string($rawCode)) {
             $this->merge([
-                'ticket_code' => strtoupper(trim((string) $this->input('ticket_code'))),
+                'ticket_code' => strtoupper(trim($rawCode)),
+            ]);
+        }
+
+        $rawToken = $this->input('secret_token');
+        if (is_string($rawToken)) {
+            $this->merge([
+                'secret_token' => strtoupper(trim($rawToken)),
             ]);
         }
     }

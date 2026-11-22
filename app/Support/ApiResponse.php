@@ -32,9 +32,15 @@ class ApiResponse
      * Build a standardized JSON error envelope.
      *
      * @param  array<string, mixed>|null  $fields
+     * @param  array<string, string|array<int, string>>  $headers
      */
-    public static function error(string $code, string $message, int $status = 400, ?array $fields = null): JsonResponse
-    {
+    public static function error(
+        string $code,
+        string $message,
+        int $status = 400,
+        ?array $fields = null,
+        array $headers = [],
+    ): JsonResponse {
         $error = [
             'code' => $code,
             'message' => $message,
@@ -48,6 +54,6 @@ class ApiResponse
             'success' => false,
             'server_time' => now()->toIso8601ZuluString(),
             'error' => $error,
-        ], $status);
+        ], $status, $headers);
     }
 }

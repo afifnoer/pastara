@@ -8,7 +8,6 @@ use Closure;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Http\Request;
-use Laravel\Sanctum\PersonalAccessToken;
 use Symfony\Component\HttpFoundation\Response;
 
 class EnsureRole
@@ -28,10 +27,7 @@ class EnsureRole
         }
 
         if (! $user->is_active) {
-            $token = $user->currentAccessToken();
-            if ($token instanceof PersonalAccessToken) {
-                $token->delete();
-            }
+            $user->tokens()->delete();
 
             throw new AuthenticationException('Akun Anda sedang dinonaktifkan.');
         }

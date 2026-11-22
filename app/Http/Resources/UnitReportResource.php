@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace App\Http\Resources;
 
 use App\Models\Report;
+use Illuminate\Http\Request;
 
 class UnitReportResource extends BaseReportResource
 {
-    protected function formatReporter(Report $report): ?array
+    protected function formatReporter(Report $report, Request $request): ?array
     {
         // Hukum 4 Konstitusi: identik wajib dilindungi untuk tiket Mode Rahasia
         if ($report->is_secret) {

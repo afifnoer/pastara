@@ -73,7 +73,7 @@ abstract class BaseReportResource extends JsonResource
                 ] : null,
                 'address_detail' => $report->address_detail,
             ],
-            'reporter' => $this->formatReporter($report),
+            'reporter' => $this->formatReporter($report, $request),
             'assigned_officer' => $this->formatAssignedOfficer($report),
             'sla' => [
                 'sla_hours_snapshot' => $report->sla_hours_snapshot,
@@ -114,7 +114,7 @@ abstract class BaseReportResource extends JsonResource
     /**
      * @return array<string, mixed>|null
      */
-    abstract protected function formatReporter(Report $report): ?array;
+    abstract protected function formatReporter(Report $report, Request $request): ?array;
 
     /**
      * @return array<string, mixed>|null

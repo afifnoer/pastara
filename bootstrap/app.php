@@ -7,13 +7,12 @@ use App\Exceptions\InvalidStateTransitionException;
 use App\Http\Middleware\EnsureRole;
 use App\Http\Middleware\SecurityHeadersMiddleware;
 use App\Support\ApiResponse;
-use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
-use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Exceptions\ThrottleRequestsException;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
@@ -41,75 +40,82 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $isApiRequest = static fn (Request $request): bool => $request->is('api/*') || $request->expectsJson();
 
-        $exceptions->render(function (AuthenticationException $e, Request $request) use ($isApiRequest) {
-            if (! $isApiRequest($request)) {
-                return null;
-            }
-
-            return ApiResponse::error(
-                'UNAUTHENTICATED',
-                'Sesi Anda telah berakhir. Silakan masuk kembali.',
-                401
-            );
-        });
-
-        $exceptions->render(function (EscrowLockViolationException $e, Request $request) use ($isApiRequest) {
-            Log::channel('security')->warning('Escrow lock violation detected', [
+        $logSecurityEvent = static function (string $event, Request $request, int $status, string $message): void {
+            Log::channel('security')->warning($event, [
+                'status' => $status,
                 'path' => $request->path(),
                 'method' => $request->method(),
                 'ip' => $request->ip(),
                 'user_id' => $request->user()?->id,
-                'message' => $e->getMessage(),
+                'message' => $message,
             ]);
+        };
+
+        $exceptions->render(function (AuthenticationException $e, Request $request) use ($isApiRequest): ?JsonResponse {
+            if (! $isApiRequest($request)) {
+                return null;
+            }
+
+            $rawMessage = trim($e->getMessage());
+            $message = ($rawMessage !== '' && $rawMessage !== 'Unauthenticated.')
+                ? $rawMessage
+                : 'Sesi Anda telah berakhir. Silakan masuk kembali.';
+
+            return ApiResponse::error('UNAUTHENTICATED', $message, 401);
+        });
+
+        $exceptions->render(function (EscrowLockViolationException $e, Request $request) use ($isApiRequest, $logSecurityEvent): ?JsonResponse {
+            $message = $e->getMessage() !== ''
+                ? $e->getMessage()
+                : 'Penutupan tiket sepihak dilarang oleh aturan Escrow.';
+
+            $logSecurityEvent('Escrow lock violation detected', $request, 403, $message);
 
             if (! $isApiRequest($request)) {
                 return null;
             }
 
-            return ApiResponse::error(
-                'ESCROW_LOCK_VIOLATION',
-                $e->getMessage() !== '' ? $e->getMessage() : 'Penutupan tiket sepihak dilarang oleh aturan Escrow.',
-                403
-            );
+            return ApiResponse::error('ESCROW_LOCK_VIOLATION', $message, 403);
         });
 
-        $exceptions->render(function (AuthorizationException|AccessDeniedHttpException $e, Request $request) use ($isApiRequest) {
+        $exceptions->render(function (AccessDeniedHttpException $e, Request $request) use ($isApiRequest, $logSecurityEvent): ?JsonResponse {
+            $rawMessage = trim($e->getMessage());
+            $message = ($rawMessage !== '' && $rawMessage !== 'This action is unauthorized.')
+                ? $rawMessage
+                : 'Anda tidak memiliki izin untuk melakukan aksi ini.';
+
+            $logSecurityEvent('Forbidden access denied', $request, 403, $message);
+
             if (! $isApiRequest($request)) {
                 return null;
             }
 
-            return ApiResponse::error(
-                'FORBIDDEN',
-                'Anda tidak memiliki izin untuk melakukan aksi ini.',
-                403
-            );
+            return ApiResponse::error('FORBIDDEN', $message, 403);
         });
 
-        $exceptions->render(function (ModelNotFoundException|NotFoundHttpException $e, Request $request) use ($isApiRequest) {
+        $exceptions->render(function (NotFoundHttpException $e, Request $request) use ($isApiRequest): ?JsonResponse {
             if (! $isApiRequest($request)) {
                 return null;
             }
 
-            return ApiResponse::error(
-                'NOT_FOUND',
-                'Data tidak ditemukan.',
-                404
-            );
+            return ApiResponse::error('NOT_FOUND', 'Data tidak ditemukan.', 404);
         });
 
-        $exceptions->render(function (InvalidStateTransitionException $e, Request $request) use ($isApiRequest) {
+        $exceptions->render(function (InvalidStateTransitionException $e, Request $request) use ($isApiRequest, $logSecurityEvent): ?JsonResponse {
+            $message = $e->getMessage() !== ''
+                ? $e->getMessage()
+                : 'Status laporan telah berubah atau transisi tidak diizinkan.';
+
+            $logSecurityEvent('Invalid state transition rejected', $request, 409, $message);
+
             if (! $isApiRequest($request)) {
                 return null;
             }
 
-            return ApiResponse::error(
-                'INVALID_STATE_TRANSITION',
-                $e->getMessage() !== '' ? $e->getMessage() : 'Status laporan telah berubah atau transisi tidak diizinkan.',
-                409
-            );
+            return ApiResponse::error('INVALID_STATE_TRANSITION', $message, 409);
         });
 
-        $exceptions->render(function (ValidationException $e, Request $request) use ($isApiRequest) {
+        $exceptions->render(function (ValidationException $e, Request $request) use ($isApiRequest): ?JsonResponse {
             if (! $isApiRequest($request)) {
                 return null;
             }
@@ -122,7 +128,7 @@ return Application::configure(basePath: dirname(__DIR__))
             );
         });
 
-        $exceptions->render(function (ThrottleRequestsException $e, Request $request) use ($isApiRequest) {
+        $exceptions->render(function (ThrottleRequestsException $e, Request $request) use ($isApiRequest): ?JsonResponse {
             if (! $isApiRequest($request)) {
                 return null;
             }
@@ -130,24 +136,59 @@ return Application::configure(basePath: dirname(__DIR__))
             return ApiResponse::error(
                 'TOO_MANY_REQUESTS',
                 'Terlalu banyak percobaan. Coba lagi dalam beberapa saat.',
-                429
+                429,
+                null,
+                $e->getHeaders()
             );
         });
 
-        $exceptions->render(function (HttpExceptionInterface $e, Request $request) use ($isApiRequest) {
+        $exceptions->render(function (HttpExceptionInterface $e, Request $request) use ($isApiRequest, $logSecurityEvent): ?JsonResponse {
             if (! $isApiRequest($request)) {
                 return null;
             }
 
-            return match ($e->getStatusCode()) {
-                403 => ApiResponse::error('FORBIDDEN', $e->getMessage() ?: 'Anda tidak memiliki izin untuk melakukan aksi ini.', 403),
-                404 => ApiResponse::error('NOT_FOUND', $e->getMessage() ?: 'Data tidak ditemukan.', 404),
-                409 => ApiResponse::error('INVALID_STATE_TRANSITION', $e->getMessage() ?: 'Status laporan telah berubah atau transisi tidak diizinkan.', 409),
-                default => null,
+            $status = $e->getStatusCode();
+            $headers = $e->getHeaders();
+            $rawMessage = trim($e->getMessage());
+
+            if ($status === 403) {
+                $message = ($rawMessage !== '' && $rawMessage !== 'This action is unauthorized.')
+                    ? $rawMessage
+                    : 'Anda tidak memiliki izin untuk melakukan aksi ini.';
+                $logSecurityEvent('Forbidden HTTP exception', $request, 403, $message);
+
+                return ApiResponse::error('FORBIDDEN', $message, 403, null, $headers);
+            }
+
+            if ($status === 409) {
+                $message = $rawMessage !== ''
+                    ? $rawMessage
+                    : 'Status laporan telah berubah atau transisi tidak diizinkan.';
+                $logSecurityEvent('Conflict HTTP exception', $request, 409, $message);
+
+                return ApiResponse::error('INVALID_STATE_TRANSITION', $message, 409, null, $headers);
+            }
+
+            return match ($status) {
+                400 => ApiResponse::error('BAD_REQUEST', $rawMessage !== '' ? $rawMessage : 'Permintaan tidak valid.', 400, null, $headers),
+                404 => ApiResponse::error('NOT_FOUND', $rawMessage !== '' ? $rawMessage : 'Data tidak ditemukan.', 404, null, $headers),
+                405 => ApiResponse::error('METHOD_NOT_ALLOWED', 'Metode HTTP tidak diizinkan untuk endpoint ini.', 405, null, $headers),
+                413 => ApiResponse::error('PAYLOAD_TOO_LARGE', 'Ukuran data atau berkas yang diunggah melebihi batas maksimum.', 413, null, $headers),
+                422 => ApiResponse::error('VALIDATION_ERROR', $rawMessage !== '' ? $rawMessage : 'Data yang dikirim belum lengkap atau tidak valid.', 422, null, $headers),
+                503 => ApiResponse::error('SERVICE_UNAVAILABLE', 'Layanan sedang dalam pemeliharaan. Silakan coba lagi nanti.', 503, null, $headers),
+                default => ApiResponse::error(
+                    $status >= 500 ? 'INTERNAL_SERVER_ERROR' : 'HTTP_ERROR',
+                    $status >= 500 && ! config('app.debug')
+                        ? 'Terjadi kesalahan pada sistem. Silakan coba lagi.'
+                        : ($rawMessage !== '' ? $rawMessage : 'Terjadi kesalahan pada permintaan Anda.'),
+                    $status,
+                    null,
+                    $headers
+                ),
             };
         });
 
-        $exceptions->render(function (Throwable $e, Request $request) use ($isApiRequest) {
+        $exceptions->render(function (Throwable $e, Request $request) use ($isApiRequest): ?JsonResponse {
             if (! $isApiRequest($request) || config('app.debug')) {
                 return null;
             }

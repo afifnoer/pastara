@@ -67,10 +67,26 @@ it('serializes UserResource and all 4 ReportResource contexts while protecting s
             ->and($publicPayload['sla']['sla_zone'])->toBe('PAUSED')
             ->and($publicPayload['signoff']['signoff_remaining_seconds'])->toBeGreaterThan(0);
 
-        // 2. CitizenReportResource (owner sees own full identity)
-        $citizenPayload = (new CitizenReportResource($purw))->toArray($request);
-        expect($citizenPayload['reporter']['email'])->toBe('warga.demo@pastara.id')
-            ->and($citizenPayload['reporter']['name'])->toBe('Warga Pelapor Uji');
+        // 2. CitizenReportResource (owner sees own full identity; non-owner watcher sees masked identity without PII)
+        $owner = User::where('email', 'warga.demo@pastara.id')->firstOrFail();
+        $ownerRequest = Request::create('/api/v1/citizen/reports');
+        $ownerRequest->setUserResolver(static fn (): User => $owner);
+
+        $citizenOwnerPayload = (new CitizenReportResource($purw))->toArray($ownerRequest);
+        expect($citizenOwnerPayload['reporter']['email'])->toBe('warga.demo@pastara.id')
+            ->and($citizenOwnerPayload['reporter']['name'])->toBe('Warga Pelapor Uji');
+
+        $watcher = User::where('role', 'WARGA')->where('id', '!=', $owner->id)->firstOrFail();
+        $watcherRequest = Request::create('/api/v1/citizen/reports?tab=watching');
+        $watcherRequest->setUserResolver(static fn (): User => $watcher);
+
+        $citizenWatcherPublicPayload = (new CitizenReportResource($escrow))->toArray($watcherRequest);
+        expect($citizenWatcherPublicPayload['reporter'])->toBe(['name' => 'W***a P. U.'])
+            ->and($citizenWatcherPublicPayload['reporter'])->not->toHaveKeys(['email', 'phone']);
+
+        $citizenWatcherSecretPayload = (new CitizenReportResource($purw))->toArray($watcherRequest);
+        expect($citizenWatcherSecretPayload['reporter'])->toBe(['name' => 'Pelapor Rahasia'])
+            ->and($citizenWatcherSecretPayload['reporter'])->not->toHaveKeys(['email', 'phone']);
 
         // 3. UnitReportResource on secret ticket (Hukum 4 Konstitusi!)
         $unitSecretPayload = (new UnitReportResource($purw))->toArray($request);

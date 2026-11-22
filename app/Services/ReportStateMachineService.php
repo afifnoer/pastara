@@ -29,6 +29,10 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Intervention\Image\Drivers\Gd\Driver;
+use Intervention\Image\Encoders\WebpEncoder;
+use Intervention\Image\ImageManager;
+use RuntimeException;
 
 class ReportStateMachineService
 {
@@ -116,11 +120,11 @@ class ReportStateMachineService
                 'opd_unit_id' => $targetUnit->id,
                 'district_id' => (int) $payload['district_id'],
                 'village_id' => $village->id,
-                'title' => $this->sanitizer->sanitize((string) $payload['title']),
+                'title' => mb_substr($this->sanitizer->sanitize((string) $payload['title']), 0, 120),
                 'description_sanitized' => $this->sanitizer->sanitize((string) $payload['description']),
                 'latitude' => (float) $payload['latitude'],
                 'longitude' => (float) $payload['longitude'],
-                'address_detail' => isset($payload['address_detail']) ? trim((string) $payload['address_detail']) : null,
+                'address_detail' => isset($payload['address_detail']) ? $this->sanitizer->sanitize(trim((string) $payload['address_detail'])) : null,
                 'is_secret' => $isSecret,
                 'secret_token_hash' => $plainToken !== null ? Report::hashSecretToken($plainToken) : null,
                 'status' => ReportStatus::ROUTED_TO_UNIT,
@@ -898,7 +902,7 @@ class ReportStateMachineService
 
     private function assertCitizenSignOffAuthorized(Report $report, ?User $actor, ?string $secretToken): bool
     {
-        if ($actor !== null && $actor->role === UserRole::WARGA && (int) $actor->id === (int) $report->reporter_id) {
+        if ($actor !== null && $actor->is_active && $actor->role === UserRole::WARGA && (int) $actor->id === (int) $report->reporter_id) {
             return true;
         }
 
@@ -913,7 +917,7 @@ class ReportStateMachineService
     {
         $this->assertStatus($report, ReportStatus::PENDING_CITIZEN_SIGN_OFF);
 
-        if ($report->signoff_deadline_at !== null && CarbonImmutable::now('UTC')->gt($report->signoff_deadline_at)) {
+        if ($report->signoff_deadline_at === null || CarbonImmutable::now('UTC')->gt($report->signoff_deadline_at)) {
             throw new InvalidStateTransitionException('Jendela waktu konfirmasi warga 72 jam telah berakhir.');
         }
     }
@@ -967,12 +971,49 @@ class ReportStateMachineService
 
     private function storeApbdDocument(UploadedFile $file): string
     {
+        $realPath = $file->getRealPath() ?: $file->getPathname();
+        $rawContents = $realPath !== '' ? @file_get_contents($realPath) : false;
+
+        if ($rawContents === false || $rawContents === '') {
+            throw ValidationException::withMessages([
+                'document_proof' => ['Berkas dokumen bukti usulan APBD tidak dapat dibaca atau kosong.'],
+            ]);
+        }
+
+        $detectedMime = strtolower((string) $file->getMimeType());
         $now = CarbonImmutable::now('UTC');
-        $ext = strtolower($file->getClientOriginalExtension() ?: 'pdf');
-        $path = sprintf('documents/%s/%s/%s.%s', $now->format('Y'), $now->format('m'), Str::uuid(), $ext);
 
-        Storage::disk('public')->put($path, file_get_contents($file->getRealPath() ?: $file->getPathname()) ?: '');
+        if ($detectedMime === 'application/pdf') {
+            if (! str_starts_with($rawContents, '%PDF-')) {
+                throw ValidationException::withMessages([
+                    'document_proof' => ['Berkas PDF tidak valid atau rusak.'],
+                ]);
+            }
 
-        return $path;
+            $path = sprintf('documents/%s/%s/%s.pdf', $now->format('Y'), $now->format('m'), Str::uuid());
+            if (! Storage::disk('public')->put($path, $rawContents)) {
+                throw new RuntimeException('Gagal menyimpan dokumen bukti APBD ke penyimpanan.');
+            }
+
+            return $path;
+        }
+
+        if (in_array($detectedMime, ['image/jpeg', 'image/png'], true)) {
+            $imageManager = new ImageManager(Driver::class);
+            $image = $imageManager->decodePath($realPath);
+            $image->orient();
+            $encoded = (string) $image->encode(new WebpEncoder(quality: 85, strip: true));
+            $path = sprintf('documents/%s/%s/%s.webp', $now->format('Y'), $now->format('m'), Str::uuid());
+
+            if (! Storage::disk('public')->put($path, $encoded)) {
+                throw new RuntimeException('Gagal menyimpan dokumen gambar bukti APBD ke penyimpanan.');
+            }
+
+            return $path;
+        }
+
+        throw ValidationException::withMessages([
+            'document_proof' => ['Dokumen bukti usulan APBD hanya boleh berupa PDF, JPG, atau PNG yang valid.'],
+        ]);
     }
 }

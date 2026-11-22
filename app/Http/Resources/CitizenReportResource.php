@@ -5,14 +5,24 @@ declare(strict_types=1);
 namespace App\Http\Resources;
 
 use App\Models\Report;
+use Illuminate\Http\Request;
 
 class CitizenReportResource extends BaseReportResource
 {
-    protected function formatReporter(Report $report): ?array
+    protected function formatReporter(Report $report, Request $request): ?array
     {
         $reporter = $report->relationLoaded('reporter') ? $report->reporter : null;
         if ($reporter === null) {
             return null;
+        }
+
+        $viewer = $request->user('sanctum') ?? $request->user();
+        $isOwner = $viewer !== null && (int) $viewer->id === (int) $report->reporter_id;
+
+        if (! $isOwner) {
+            return [
+                'name' => $report->is_secret ? 'Pelapor Rahasia' : $this->maskName($reporter->name),
+            ];
         }
 
         return [

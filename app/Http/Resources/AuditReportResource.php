@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace App\Http\Resources;
 
 use App\Models\Report;
+use Illuminate\Http\Request;
 
 class AuditReportResource extends BaseReportResource
 {
-    protected function formatReporter(Report $report): ?array
+    protected function formatReporter(Report $report, Request $request): ?array
     {
         $reporter = $report->relationLoaded('reporter') ? $report->reporter : null;
         if ($reporter === null) {
