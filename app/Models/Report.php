@@ -61,6 +61,16 @@ class Report extends Model
         'secret_token_hash',
     ];
 
+    protected $attributes = [
+        'is_secret' => false,
+        'current_cycle' => 1,
+        'is_sla_overdue' => false,
+        'is_milestone_overdue' => false,
+        'is_late' => false,
+        'geotag_warning' => false,
+        'upvote_count' => 0,
+    ];
+
     protected function casts(): array
     {
         return [

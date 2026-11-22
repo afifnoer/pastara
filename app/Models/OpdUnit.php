@@ -25,6 +25,10 @@ class OpdUnit extends Model
         'metrics_updated_at',
     ];
 
+    protected $attributes = [
+        'is_active' => true,
+    ];
+
     protected function casts(): array
     {
         return [

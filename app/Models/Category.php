@@ -26,6 +26,12 @@ class Category extends Model
         'is_active',
     ];
 
+    protected $attributes = [
+        'route_by_village' => false,
+        'recommend_secret' => false,
+        'is_active' => true,
+    ];
+
     protected function casts(): array
     {
         return [

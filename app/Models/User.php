@@ -34,6 +34,11 @@ class User extends Authenticatable
         'is_active',
     ];
 
+    protected $attributes = [
+        'role' => UserRole::WARGA->value,
+        'is_active' => true,
+    ];
+
     /**
      * The attributes that should be hidden for serialization.
      *
