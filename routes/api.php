@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CitizenReportController;
+use App\Http\Controllers\Api\V1\OfficerTaskController;
 use App\Http\Controllers\Api\V1\PublicPortalController;
 use App\Http\Controllers\Api\V1\UnitReportController;
 use App\Support\ApiResponse;
@@ -71,5 +72,12 @@ Route::prefix('v1')->group(function (): void {
         Route::patch('/reports/{report}/reassign-officer', [UnitReportController::class, 'reassignOfficer'])->whereNumber('report');
         Route::post('/reports/{report}/reject', [UnitReportController::class, 'reject'])->whereNumber('report');
         Route::post('/reports/{report}/reroute', [UnitReportController::class, 'reroute'])->whereNumber('report');
+    });
+
+    // M05 — Tugas Lapangan Petugas
+    Route::prefix('officer')->middleware(['auth:sanctum', 'role:PETUGAS', 'throttle:api'])->group(function (): void {
+        Route::get('/tasks', [OfficerTaskController::class, 'index']);
+        Route::post('/tasks/{report}/progress', [OfficerTaskController::class, 'storeProgress'])->whereNumber('report');
+        Route::post('/tasks/{report}/evidence', [OfficerTaskController::class, 'submitEvidence'])->whereNumber('report');
     });
 });
