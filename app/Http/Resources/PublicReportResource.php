@@ -10,6 +10,12 @@ class PublicReportResource extends BaseReportResource
 {
     protected function formatReporter(Report $report): ?array
     {
+        if ($report->is_secret) {
+            return [
+                'name' => 'Pelapor Rahasia',
+            ];
+        }
+
         $reporter = $report->relationLoaded('reporter') ? $report->reporter : null;
 
         return [

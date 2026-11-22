@@ -28,8 +28,17 @@ Route::prefix('v1')->group(function (): void {
     });
 
     // M02 — Portal Transparansi Publik
-    Route::prefix('public')->middleware('throttle:api')->group(function (): void {
-        Route::get('/reference-data', [PublicPortalController::class, 'referenceData']);
-        Route::get('/map-markers', [PublicPortalController::class, 'mapMarkers']);
+    Route::prefix('public')->group(function (): void {
+        Route::middleware('throttle:api')->group(function (): void {
+            Route::get('/reference-data', [PublicPortalController::class, 'referenceData']);
+            Route::get('/map-markers', [PublicPortalController::class, 'mapMarkers']);
+            Route::get('/reports', [PublicPortalController::class, 'reports']);
+            Route::get('/reports/{ticket_code}', [PublicPortalController::class, 'show'])
+                ->where('ticket_code', '[A-Za-z0-9-]+');
+            Route::get('/scorecard', [PublicPortalController::class, 'scorecard']);
+        });
+
+        Route::post('/track', [PublicPortalController::class, 'track'])
+            ->middleware('throttle:track');
     });
 });
