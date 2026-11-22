@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\CitizenReportController;
 use App\Http\Controllers\Api\V1\PublicPortalController;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
@@ -40,5 +41,20 @@ Route::prefix('v1')->group(function (): void {
 
         Route::post('/track', [PublicPortalController::class, 'track'])
             ->middleware('throttle:track');
+    });
+
+    // M03 — Pelaporan Warga
+    Route::middleware(['auth:sanctum', 'role:WARGA'])->group(function (): void {
+        Route::middleware('throttle:api')->group(function (): void {
+            Route::get('/reports/nearby', [CitizenReportController::class, 'nearby']);
+            Route::post('/reports/{report}/upvote', [CitizenReportController::class, 'upvote'])
+                ->whereNumber('report');
+            Route::patch('/reports/{report}/watch', [CitizenReportController::class, 'watch'])
+                ->whereNumber('report');
+            Route::get('/citizen/reports', [CitizenReportController::class, 'index']);
+        });
+
+        Route::post('/reports', [CitizenReportController::class, 'store'])
+            ->middleware('throttle:create-report');
     });
 });
