@@ -327,7 +327,7 @@ class ReportStateMachineService
                 actor: $admin,
                 fromStatus: ReportStatus::ROUTED_TO_UNIT,
                 toStatus: ReportStatus::IN_PROGRESS,
-                note: $sanitizedNote ?? "Ditugaskan kepada {$officer->name} (Jalur 1 Operasional).",
+                note: $sanitizedNote ?? 'Petugas lapangan unit ditugaskan untuk penanganan operasional (Jalur 1).',
                 metadata: ['officer_id' => $officer->id],
             );
 

@@ -217,19 +217,23 @@ it('returns honest global summary separating APBD scheduled from verified physic
     $expectedPhysicalClosed = Report::query()->whereIn('status', [
         ReportStatus::VERIFIED_CLOSED->value,
         ReportStatus::AUTO_VERIFIED_CLOSED->value,
-        ReportStatus::CLOSED_BY_AUDIT->value,
     ])->count();
+    $expectedClosedByAudit = Report::query()->where('status', ReportStatus::CLOSED_BY_AUDIT->value)->count();
 
     expect($summary['total_reports'])->toBe($expectedTotal)
         ->and($summary['budget_scheduled_apbd'])->toBe($expectedBudgetScheduled)
         ->and($summary['budget_scheduled_apbd'])->toBeGreaterThanOrEqual(1)
         ->and($summary['verified_closed_physical'])->toBe($expectedPhysicalClosed)
-        ->and($summary['rejected_tickets'] + $summary['budget_scheduled_apbd'] + $summary['verified_closed_physical'] + $summary['active_tickets'])
+        ->and($summary['closed_by_audit'])->toBe($expectedClosedByAudit)
+        ->and($summary['rejected_tickets'] + $summary['budget_scheduled_apbd'] + $summary['verified_closed_physical'] + $summary['closed_by_audit'] + $summary['active_tickets'])
         ->toBe($summary['total_reports']);
 
     // Verify PST-SADA2027 is accounted under DPUPR budget_scheduled_count, NOT physical_closed_count
     $opdScorecard = collect($response->json('data.opd_scorecard'));
-    expect($opdScorecard)->toHaveCount(OpdUnit::query()->active()->count());
+    expect($opdScorecard)->toHaveCount(OpdUnit::query()->active()->count())
+        ->and($opdScorecard->sum('physical_closed_count'))->toBe($summary['verified_closed_physical'])
+        ->and($opdScorecard->sum('closed_by_audit_count'))->toBe($summary['closed_by_audit'])
+        ->and($opdScorecard->sum('overdue_count'))->toBe($summary['overdue_reports']);
 
     $dpupr = $opdScorecard->firstWhere('code', 'DPUPR');
     $dpuprBudgetCount = Report::query()
@@ -241,7 +245,6 @@ it('returns honest global summary separating APBD scheduled from verified physic
         ->whereIn('status', [
             ReportStatus::VERIFIED_CLOSED->value,
             ReportStatus::AUTO_VERIFIED_CLOSED->value,
-            ReportStatus::CLOSED_BY_AUDIT->value,
         ])
         ->count();
 

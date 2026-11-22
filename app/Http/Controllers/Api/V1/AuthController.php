@@ -16,12 +16,18 @@ use App\Models\User;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Laravel\Sanctum\PersonalAccessToken;
 
 class AuthController extends Controller
 {
+    /**
+     * Pre-computed bcrypt hash used to equalize login response latency when an email does not exist (SR-004).
+     */
+    private const DUMMY_PASSWORD_HASH = '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi';
+
     public function register(RegisterRequest $request): JsonResponse
     {
         $validated = $request->validated();
@@ -46,13 +52,10 @@ class AuthController extends Controller
     public function login(LoginRequest $request): JsonResponse
     {
         $validated = $request->validated();
+        $user = User::query()->with('opdUnit')->where('email', $validated['email'])->first();
+        $passwordMatches = Hash::check($validated['password'], $user !== null ? $user->password : self::DUMMY_PASSWORD_HASH);
 
-        $user = User::query()
-            ->with('opdUnit')
-            ->where('email', $validated['email'])
-            ->first();
-
-        if ($user === null || ! Hash::check($validated['password'], $user->password) || ! $user->is_active) {
+        if ($user === null || ! $passwordMatches || ! $user->is_active) {
             Log::channel('security')->warning('Failed login attempt', [
                 'email' => $validated['email'],
                 'ip' => $request->ip(),
@@ -62,10 +65,8 @@ class AuthController extends Controller
             return ApiResponse::error('UNAUTHENTICATED', 'Email atau password salah.', 401);
         }
 
-        $token = $user->createToken('auth-token')->plainTextToken;
-
         return ApiResponse::success([
-            'token' => $token,
+            'token' => $user->createToken('auth-token')->plainTextToken,
             'user' => new UserResource($user),
         ]);
     }
@@ -105,11 +106,12 @@ class AuthController extends Controller
         $user = $request->user();
         $validated = $request->validated();
 
-        $user->update([
-            'name' => $validated['name'],
-            'phone' => $validated['phone'] ?? null,
-        ]);
+        $attributes = ['name' => $validated['name']];
+        if (array_key_exists('phone', $validated)) {
+            $attributes['phone'] = $validated['phone'];
+        }
 
+        $user->update($attributes);
         $user->loadMissing('opdUnit');
 
         return ApiResponse::success(new UserResource($user));
@@ -119,16 +121,19 @@ class AuthController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
-        $user->update([
-            'password' => $request->validated('password'),
-        ]);
-
         $currentToken = $user->currentAccessToken();
-        $query = $user->tokens();
-        if ($currentToken instanceof PersonalAccessToken) {
-            $query->where('id', '!=', $currentToken->id);
-        }
-        $query->delete();
+
+        DB::transaction(function () use ($user, $request, $currentToken): void {
+            $user->update([
+                'password' => $request->validated('password'),
+            ]);
+
+            $query = $user->tokens();
+            if ($currentToken instanceof PersonalAccessToken) {
+                $query->where('id', '!=', $currentToken->id);
+            }
+            $query->delete();
+        });
 
         return ApiResponse::success([
             'message' => 'Kata sandi berhasil diperbarui.',

@@ -59,8 +59,13 @@ class GeotagValidationService
 
         if ($type === PhotoType::AFTER) {
             $extracted = $this->extractExifMetadata($realPath);
-            $exifLat = $extracted['latitude'] ?? $deviceLat;
-            $exifLng = $extracted['longitude'] ?? $deviceLng;
+            if ($extracted['latitude'] !== null && $extracted['longitude'] !== null) {
+                $exifLat = $extracted['latitude'];
+                $exifLng = $extracted['longitude'];
+            } elseif ($deviceLat !== null && $deviceLng !== null) {
+                $exifLat = $deviceLat;
+                $exifLng = $deviceLng;
+            }
             $exifTakenAt = $extracted['taken_at'];
 
             if ($exifLat !== null && $exifLng !== null) {
@@ -89,7 +94,7 @@ class GeotagValidationService
 
         $image = $this->imageManager->decodePath($realPath);
         $image->orient();
-        $image->scaleDown(width: self::MAX_IMAGE_WIDTH);
+        $image->scaleDown(width: self::MAX_IMAGE_WIDTH, height: self::MAX_IMAGE_WIDTH);
 
         $cleanBinary = (string) $image->encode(new WebpEncoder(quality: 85, strip: true));
         Storage::disk('public')->put($filePath, $cleanBinary);
@@ -176,11 +181,11 @@ class GeotagValidationService
         $lng = null;
 
         if (isset($gps['GPSLatitude'], $gps['GPSLatitudeRef']) && is_array($gps['GPSLatitude'])) {
-            $lat = $this->parseGpsDms($gps['GPSLatitude'], (string) $gps['GPSLatitudeRef']);
+            $lat = $this->parseGpsDms($gps['GPSLatitude'], (string) $gps['GPSLatitudeRef'], true);
         }
 
         if (isset($gps['GPSLongitude'], $gps['GPSLongitudeRef']) && is_array($gps['GPSLongitude'])) {
-            $lng = $this->parseGpsDms($gps['GPSLongitude'], (string) $gps['GPSLongitudeRef']);
+            $lng = $this->parseGpsDms($gps['GPSLongitude'], (string) $gps['GPSLongitudeRef'], false);
         }
 
         $rawDate = $exifSection['DateTimeOriginal'] ?? $ifd0['DateTime'] ?? null;
@@ -234,16 +239,24 @@ class GeotagValidationService
         }
 
         $maxAgeSeconds = (int) config('pastara.exif_max_age_hours', 24) * 3600;
+        $ageSeconds = $takenAt->diffInSeconds(CarbonImmutable::now('UTC'), false);
 
-        return abs(CarbonImmutable::now('UTC')->diffInSeconds($takenAt)) > $maxAgeSeconds;
+        // Warn when photo is older than max age OR more than 5 minutes in the future (clock manipulation)
+        return $ageSeconds > $maxAgeSeconds || $ageSeconds < -300;
     }
 
     /**
      * @param  array<int, mixed>  $dms
      */
-    private function parseGpsDms(array $dms, string $hemisphere): ?float
+    private function parseGpsDms(array $dms, string $hemisphere, bool $isLatitude): ?float
     {
         if (count($dms) < 3) {
+            return null;
+        }
+
+        $hemi = strtoupper(trim($hemisphere));
+        $validHemispheres = $isLatitude ? ['N', 'S'] : ['E', 'W'];
+        if (! in_array($hemi, $validHemispheres, true)) {
             return null;
         }
 
@@ -255,8 +268,15 @@ class GeotagValidationService
             return null;
         }
 
+        if ($degrees < 0.0 || $minutes < 0.0 || $minutes >= 60.0 || $seconds < 0.0 || $seconds >= 60.0) {
+            return null;
+        }
+
         $decimal = $degrees + ($minutes / 60.0) + ($seconds / 3600.0);
-        $hemi = strtoupper(trim($hemisphere));
+        $maxBound = $isLatitude ? 90.0 : 180.0;
+        if ($decimal > $maxBound) {
+            return null;
+        }
 
         if ($hemi === 'S' || $hemi === 'W') {
             $decimal *= -1;
@@ -292,9 +312,10 @@ class GeotagValidationService
             return null;
         }
 
+        // EXIF DateTimeOriginal stores local camera clock; default to Asia/Jakarta (WIB) for Cilacap field ops
         $timezone = ($offset !== null && preg_match('/^[+-]\d{2}:\d{2}$/', trim($offset)) === 1)
             ? trim($offset)
-            : 'UTC';
+            : 'Asia/Jakarta';
 
         try {
             $parsed = CarbonImmutable::createFromFormat('Y:m:d H:i:s', trim($rawDate), $timezone);
@@ -307,15 +328,23 @@ class GeotagValidationService
 
     private function encodeThumbnailWithinLimit(ImageInterface $thumbImage): string
     {
-        $thumbImage->scaleDown(width: self::THUMBNAIL_WIDTH);
+        $thumbImage->scaleDown(width: self::THUMBNAIL_WIDTH, height: self::THUMBNAIL_WIDTH);
 
-        foreach ([80, 65, 50, 35] as $quality) {
+        foreach ([80, 65, 50, 35, 25] as $quality) {
             $binary = (string) $thumbImage->encode(new WebpEncoder(quality: $quality, strip: true));
             if (strlen($binary) <= self::THUMBNAIL_MAX_BYTES) {
                 return $binary;
             }
         }
 
-        return (string) $thumbImage->encode(new WebpEncoder(quality: 25, strip: true));
+        foreach ([320, 240, 160] as $fallbackDim) {
+            $thumbImage->scaleDown(width: $fallbackDim, height: $fallbackDim);
+            $binary = (string) $thumbImage->encode(new WebpEncoder(quality: 25, strip: true));
+            if (strlen($binary) <= self::THUMBNAIL_MAX_BYTES) {
+                return $binary;
+            }
+        }
+
+        return $binary;
     }
 }

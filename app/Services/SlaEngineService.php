@@ -25,8 +25,12 @@ class SlaEngineService
             return SlaZone::APBD_SCHEDULED;
         }
 
-        if (! $report->status->isSlaRunning()) {
+        if (in_array($report->status, [ReportStatus::PENDING_CITIZEN_SIGN_OFF, ReportStatus::DISPUTED], true)) {
             return SlaZone::PAUSED;
+        }
+
+        if (! $report->status->isSlaRunning()) {
+            return SlaZone::STOPPED;
         }
 
         $ratio = $this->calculateRatio($report);

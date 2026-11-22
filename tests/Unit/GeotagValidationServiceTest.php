@@ -178,8 +178,8 @@ it('reads EXIF GPS & timestamp, passes within tolerance, strips EXIF in WebP, an
     ['report' => $report, 'officer' => $officer] = createGeotagReportFixture(IssueType::POINT, 100);
     $service = new GeotagValidationService;
 
-    // ~20 meters from report (-7.7188, 109.0154), taken 2 hours ago
-    $jpeg = buildJpegBinary(-7.71862, 109.01540, '2026:11:22 04:00:00');
+    // ~20 meters from report (-7.7188, 109.0154), taken 2 hours ago in local WIB (11:00 WIB = 04:00 UTC)
+    $jpeg = buildJpegBinary(-7.71862, 109.01540, '2026:11:22 11:00:00');
     $file = makeTempUploadedJpeg($jpeg);
 
     $photo = $service->processUpload(

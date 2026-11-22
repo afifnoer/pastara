@@ -14,6 +14,7 @@ use App\Http\Resources\PublicReportResource;
 use App\Services\PublicPortalService;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 
 class PublicPortalController extends Controller
@@ -47,10 +48,11 @@ class PublicPortalController extends Controller
         );
     }
 
-    public function show(string $ticketCode): JsonResponse
+    public function show(Request $request, string $ticketCode): JsonResponse
     {
         $report = $this->portalService->getReportForPublicDetail($ticketCode);
         Gate::authorize('viewPublic', $report);
+        $this->portalService->loadDetailRelations($report, $request->user('sanctum')?->id);
 
         return ApiResponse::success(new PublicReportResource($report));
     }
@@ -61,6 +63,7 @@ class PublicPortalController extends Controller
         $result = $this->portalService->trackReport(
             $validated['ticket_code'],
             $validated['secret_token'] ?? null,
+            $request->user('sanctum')?->id,
         );
 
         if ($result === null) {

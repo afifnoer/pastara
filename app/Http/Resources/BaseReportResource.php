@@ -324,7 +324,7 @@ abstract class BaseReportResource extends JsonResource
             return (bool) $report->has_upvoted;
         }
 
-        $user = $request->user();
+        $user = $request->user('sanctum') ?? $request->user();
         if ($user === null || ! $report->relationLoaded('upvotes')) {
             return false;
         }

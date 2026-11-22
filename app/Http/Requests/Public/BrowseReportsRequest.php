@@ -15,6 +15,19 @@ class BrowseReportsRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        if ($this->has('overdue_only')) {
+            $raw = $this->input('overdue_only');
+            if (is_string($raw)) {
+                $parsed = filter_var($raw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+                if ($parsed !== null) {
+                    $this->merge(['overdue_only' => $parsed]);
+                }
+            }
+        }
+    }
+
     /**
      * @return array<string, mixed>
      */

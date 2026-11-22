@@ -29,7 +29,6 @@ class PublicPortalService
         'district',
         'village',
         'photos',
-        'upvotes',
         'budgetSchedule.milestones',
         'disputes',
         'rating',
@@ -176,14 +175,27 @@ class PublicPortalService
     }
 
     /**
-     * Load a single report by ticket code for public detail authorization and rendering.
+     * Load a bare Report row by ticket code prior to policy authorization (avoids pre-auth eager loading).
      */
     public function getReportForPublicDetail(string $ticketCode): Report
     {
         return Report::query()
-            ->with(self::DETAIL_RELATIONS)
             ->where('ticket_code', strtoupper(trim($ticketCode)))
             ->firstOrFail();
+    }
+
+    /**
+     * Eager-load detail relations and viewer-specific has_upvoted flag after authorization passes.
+     */
+    public function loadDetailRelations(Report $report, ?int $viewerId = null): Report
+    {
+        $report->load(self::DETAIL_RELATIONS);
+        $report->setAttribute(
+            'has_upvoted',
+            $viewerId !== null && $report->upvotes()->where('user_id', $viewerId)->exists()
+        );
+
+        return $report;
     }
 
     /**
@@ -192,7 +204,7 @@ class PublicPortalService
      *
      * @return array<string, mixed>|null
      */
-    public function trackReport(string $ticketCode, ?string $secretToken): ?array
+    public function trackReport(string $ticketCode, ?string $secretToken, ?int $viewerId = null): ?array
     {
         $normalizedCode = strtoupper(trim($ticketCode));
         $report = Report::query()
@@ -217,7 +229,7 @@ class PublicPortalService
             }
         }
 
-        $report->load(self::DETAIL_RELATIONS);
+        $this->loadDetailRelations($report, $viewerId);
 
         return [
             'requires_secret_token' => false,
@@ -227,28 +239,28 @@ class PublicPortalService
     }
 
     /**
-     * Compute public accountability summary ("Statistik Jujur") and OPD scorecard table.
+     * Compute public accountability summary ("Statistik Jujur") and OPD scorecard table (strictly read-only).
      *
      * @return array<string, mixed>
      */
     public function getPublicScorecard(?int $month, ?int $year): array
     {
-        $bounds = $this->resolvePeriodBounds($month, $year);
+        [$startUtc, $endUtc] = $this->scorecardCalculator->resolvePeriodBounds($month, $year);
 
         $summaryRow = Report::query()
             ->when(
-                $bounds !== null,
-                fn (Builder $q): Builder => $q->whereBetween('created_at', [$bounds['start'], $bounds['end']])
+                $startUtc !== null && $endUtc !== null,
+                fn (Builder $q): Builder => $q->whereBetween('created_at', [$startUtc, $endUtc])
             )
             ->selectRaw('COUNT(*) AS total_reports')
             ->selectRaw('COUNT(*) FILTER (WHERE status != ?) AS valid_tickets', [ReportStatus::REJECTED->value])
             ->selectRaw('COUNT(*) FILTER (WHERE status = ?) AS rejected_tickets', [ReportStatus::REJECTED->value])
             ->selectRaw('COUNT(*) FILTER (WHERE status = ?) AS budget_scheduled_apbd', [ReportStatus::BUDGET_SCHEDULED->value])
-            ->selectRaw('COUNT(*) FILTER (WHERE status IN (?, ?, ?)) AS verified_closed_physical', [
+            ->selectRaw('COUNT(*) FILTER (WHERE status IN (?, ?)) AS verified_closed_physical', [
                 ReportStatus::VERIFIED_CLOSED->value,
                 ReportStatus::AUTO_VERIFIED_CLOSED->value,
-                ReportStatus::CLOSED_BY_AUDIT->value,
             ])
+            ->selectRaw('COUNT(*) FILTER (WHERE status = ?) AS closed_by_audit', [ReportStatus::CLOSED_BY_AUDIT->value])
             ->selectRaw('COUNT(*) FILTER (WHERE status IN (?, ?, ?, ?, ?, ?)) AS active_tickets', [
                 ReportStatus::SUBMITTED->value,
                 ReportStatus::ROUTED_TO_UNIT->value,
@@ -257,11 +269,16 @@ class PublicPortalService
                 ReportStatus::DISPUTED->value,
                 ReportStatus::REOPENED_BY_AUDIT->value,
             ])
-            ->selectRaw('COUNT(*) FILTER (WHERE is_sla_overdue = TRUE OR is_milestone_overdue = TRUE) AS overdue_reports')
+            ->selectRaw('COUNT(*) FILTER (WHERE status NOT IN (?, ?, ?, ?) AND (is_sla_overdue = TRUE OR is_milestone_overdue = TRUE)) AS overdue_reports', [
+                ReportStatus::REJECTED->value,
+                ReportStatus::VERIFIED_CLOSED->value,
+                ReportStatus::AUTO_VERIFIED_CLOSED->value,
+                ReportStatus::CLOSED_BY_AUDIT->value,
+            ])
             ->first();
 
         $opdScorecard = $this->scorecardCalculator
-            ->recalculateAllUnits($month, $year)
+            ->calculateAllUnits($month, $year)
             ->map(static function (array $unit): array {
                 unset($unit['secret_count']);
 
@@ -284,6 +301,7 @@ class PublicPortalService
                 'rejected_tickets' => (int) ($summaryRow->rejected_tickets ?? 0),
                 'budget_scheduled_apbd' => (int) ($summaryRow->budget_scheduled_apbd ?? 0),
                 'verified_closed_physical' => (int) ($summaryRow->verified_closed_physical ?? 0),
+                'closed_by_audit' => (int) ($summaryRow->closed_by_audit ?? 0),
                 'active_tickets' => (int) ($summaryRow->active_tickets ?? 0),
                 'overdue_reports' => (int) ($summaryRow->overdue_reports ?? 0),
             ],
@@ -332,35 +350,5 @@ class PublicPortalService
                     ->orWhere('address_detail', 'ilike', $pattern);
             });
         }
-    }
-
-    /**
-     * Resolve UTC period boundaries matching Asia/Jakarta calendar months/years.
-     *
-     * @return array{start: CarbonImmutable, end: CarbonImmutable}|null
-     */
-    private function resolvePeriodBounds(?int $month, ?int $year): ?array
-    {
-        if ($month === null && $year === null) {
-            return null;
-        }
-
-        $targetYear = $year ?? CarbonImmutable::now('Asia/Jakarta')->year;
-
-        if ($month !== null) {
-            $anchor = CarbonImmutable::create($targetYear, $month, 1, 0, 0, 0, 'Asia/Jakarta');
-
-            return [
-                'start' => $anchor->startOfMonth()->utc(),
-                'end' => $anchor->endOfMonth()->utc(),
-            ];
-        }
-
-        $anchor = CarbonImmutable::create($targetYear, 1, 1, 0, 0, 0, 'Asia/Jakarta');
-
-        return [
-            'start' => $anchor->startOfYear()->utc(),
-            'end' => $anchor->endOfYear()->utc(),
-        ];
     }
 }
