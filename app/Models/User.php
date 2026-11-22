@@ -11,13 +11,12 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
-use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
-    use HasApiTokens, HasFactory, Notifiable;
+    use HasApiTokens, HasFactory;
 
     /**
      * The attributes that are mass assignable.
@@ -92,5 +91,40 @@ class User extends Authenticatable
     public function notifications(): HasMany
     {
         return $this->hasMany(Notification::class);
+    }
+
+    public function uploadedPhotos(): HasMany
+    {
+        return $this->hasMany(ReportPhoto::class, 'uploaded_by_user_id');
+    }
+
+    public function createdBudgetSchedules(): HasMany
+    {
+        return $this->hasMany(BudgetSchedule::class, 'created_by_user_id');
+    }
+
+    public function updatedBudgetMilestones(): HasMany
+    {
+        return $this->hasMany(BudgetMilestone::class, 'updated_by_user_id');
+    }
+
+    public function raisedDisputes(): HasMany
+    {
+        return $this->hasMany(Dispute::class, 'raised_by_user_id');
+    }
+
+    public function auditedDisputes(): HasMany
+    {
+        return $this->hasMany(Dispute::class, 'auditor_id');
+    }
+
+    public function ratings(): HasMany
+    {
+        return $this->hasMany(Rating::class);
+    }
+
+    public function auditLogs(): HasMany
+    {
+        return $this->hasMany(AuditLog::class, 'actor_user_id');
     }
 }

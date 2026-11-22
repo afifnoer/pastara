@@ -178,8 +178,8 @@ it('reads EXIF GPS & timestamp, passes within tolerance, strips EXIF in WebP, an
     ['report' => $report, 'officer' => $officer] = createGeotagReportFixture(IssueType::POINT, 100);
     $service = new GeotagValidationService;
 
-    // ~20 meters from report (-7.7188, 109.0154), taken 2 hours ago
-    $jpeg = buildJpegBinary(-7.71862, 109.01540, '2026:11:22 04:00:00');
+    // ~20 meters from report (-7.7188, 109.0154), taken 2 hours ago in local WIB (11:00 WIB = 04:00 UTC)
+    $jpeg = buildJpegBinary(-7.71862, 109.01540, '2026:11:22 11:00:00');
     $file = makeTempUploadedJpeg($jpeg);
 
     $photo = $service->processUpload(
@@ -204,11 +204,19 @@ it('reads EXIF GPS & timestamp, passes within tolerance, strips EXIF in WebP, an
         ->and(substr($storedClean, 8, 4))->toBe('WEBP')
         ->and(strlen($storedThumb))->toBeLessThanOrEqual(204800);
 
-    // Ensure saved WebP contains no EXIF segment
-    $tmpSaved = tempnam(sys_get_temp_dir(), 'pastara_webp_');
-    file_put_contents($tmpSaved, $storedClean);
-    expect(@exif_read_data($tmpSaved))->toBeFalse();
-    @unlink($tmpSaved);
+    // Verify WebP RIFF container genuinely contains NO EXIF or XMP chunks (real binary chunk inspection — TC-I-03)
+    $offset = 12;
+    $chunkIds = [];
+    $totalLen = strlen($storedClean);
+    while ($offset + 8 <= $totalLen) {
+        $chunkId = substr($storedClean, $offset, 4);
+        $chunkSize = unpack('V', substr($storedClean, $offset + 4, 4))[1];
+        $chunkIds[] = $chunkId;
+        $offset += 8 + $chunkSize + ($chunkSize % 2);
+    }
+
+    expect($chunkIds)->not->toContain('EXIF')
+        ->and($chunkIds)->not->toContain('XMP ');
 
     CarbonImmutable::setTestNow();
 });

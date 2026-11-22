@@ -29,6 +29,11 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Intervention\Image\Drivers\Gd\Driver;
+use Intervention\Image\Encoders\WebpEncoder;
+use Intervention\Image\ImageManager;
+use RuntimeException;
+use Throwable;
 
 class ReportStateMachineService
 {
@@ -83,98 +88,122 @@ class ReportStateMachineService
             throw new AuthorizationException('Hanya akun warga aktif yang dapat mengirim laporan baru.');
         }
 
-        if ($beforePhotos === []) {
+        if ($beforePhotos === [] || count($beforePhotos) > 3) {
             throw ValidationException::withMessages([
-                'photos' => ['Minimal 1 foto kondisi awal (Before) wajib diunggah.'],
+                'photos' => ['Jumlah foto kondisi awal (Before) wajib antara 1 hingga 3 foto.'],
             ]);
         }
 
-        return DB::transaction(function () use ($reporter, $payload, $beforePhotos): array {
-            $category = Category::query()->whereKey((int) $payload['category_id'])->firstOrFail();
-            if (! $category->is_active) {
-                throw ValidationException::withMessages([
-                    'category_id' => ['Kategori yang dipilih sedang tidak aktif.'],
-                ]);
-            }
-
-            $village = Village::query()->with('opdUnit')->whereKey((int) $payload['village_id'])->firstOrFail();
-            if ((int) $village->district_id !== (int) $payload['district_id']) {
-                throw ValidationException::withMessages([
-                    'village_id' => ['Desa/kelurahan yang dipilih tidak berada pada kecamatan tersebut.'],
-                ]);
-            }
-
-            $targetUnit = $this->resolveTargetUnit($category, $village);
-            $isSecret = (bool) ($payload['is_secret'] ?? false);
-            $plainToken = $isSecret ? $this->generateSecretToken() : null;
-            $now = CarbonImmutable::now('UTC');
-
-            $report = Report::create([
-                'ticket_code' => $this->generateUniqueTicketCode(),
-                'reporter_id' => $reporter->id,
-                'category_id' => $category->id,
-                'opd_unit_id' => $targetUnit->id,
-                'district_id' => (int) $payload['district_id'],
-                'village_id' => $village->id,
-                'title' => $this->sanitizer->sanitize((string) $payload['title']),
-                'description_sanitized' => $this->sanitizer->sanitize((string) $payload['description']),
-                'latitude' => (float) $payload['latitude'],
-                'longitude' => (float) $payload['longitude'],
-                'address_detail' => isset($payload['address_detail']) ? trim((string) $payload['address_detail']) : null,
-                'is_secret' => $isSecret,
-                'secret_token_hash' => $plainToken !== null ? Report::hashSecretToken($plainToken) : null,
-                'status' => ReportStatus::ROUTED_TO_UNIT,
-                'current_cycle' => 1,
-                'issue_type_snapshot' => $category->issue_type,
-                'duplicate_radius_snapshot_m' => $category->duplicate_radius_m,
-                'geotag_tolerance_snapshot_m' => $category->geotag_tolerance_m,
-                'sla_hours_snapshot' => $category->default_sla_hours,
-                'created_at' => $now,
-                'updated_at' => $now,
+        $lat = (float) $payload['latitude'];
+        $lng = (float) $payload['longitude'];
+        $bounds = config('pastara.cilacap');
+        if (
+            $lat < (float) $bounds['min_lat'] || $lat > (float) $bounds['max_lat']
+            || $lng < (float) $bounds['min_lng'] || $lng > (float) $bounds['max_lng']
+        ) {
+            throw ValidationException::withMessages([
+                'latitude' => ['Koordinat laporan harus berada di dalam wilayah Kabupaten Cilacap.'],
             ]);
+        }
 
-            foreach (array_values($beforePhotos) as $index => $photoFile) {
-                $this->geotagValidator->processUpload(
+        $writtenFiles = [];
+
+        try {
+            return DB::transaction(function () use ($reporter, $payload, $beforePhotos, $lat, $lng, &$writtenFiles): array {
+                $category = Category::query()->whereKey((int) $payload['category_id'])->firstOrFail();
+                if (! $category->is_active) {
+                    throw ValidationException::withMessages([
+                        'category_id' => ['Kategori yang dipilih sedang tidak aktif.'],
+                    ]);
+                }
+
+                $village = Village::query()->with('opdUnit')->whereKey((int) $payload['village_id'])->firstOrFail();
+                if ((int) $village->district_id !== (int) $payload['district_id']) {
+                    throw ValidationException::withMessages([
+                        'village_id' => ['Desa/kelurahan yang dipilih tidak berada pada kecamatan tersebut.'],
+                    ]);
+                }
+
+                $targetUnit = $this->resolveTargetUnit($category, $village);
+                $isSecret = (bool) ($payload['is_secret'] ?? false);
+                $plainToken = $isSecret ? $this->generateSecretToken() : null;
+                $now = CarbonImmutable::now('UTC');
+
+                $report = Report::create([
+                    'ticket_code' => $this->generateUniqueTicketCode(),
+                    'reporter_id' => $reporter->id,
+                    'category_id' => $category->id,
+                    'opd_unit_id' => $targetUnit->id,
+                    'district_id' => (int) $payload['district_id'],
+                    'village_id' => $village->id,
+                    'title' => mb_substr($this->sanitizer->sanitize((string) $payload['title']), 0, 120),
+                    'description_sanitized' => $this->sanitizer->sanitize((string) $payload['description']),
+                    'latitude' => $lat,
+                    'longitude' => $lng,
+                    'address_detail' => isset($payload['address_detail']) ? $this->sanitizer->sanitize(trim((string) $payload['address_detail'])) : null,
+                    'is_secret' => $isSecret,
+                    'secret_token_hash' => $plainToken !== null ? Report::hashSecretToken($plainToken) : null,
+                    'status' => ReportStatus::ROUTED_TO_UNIT,
+                    'current_cycle' => 1,
+                    'issue_type_snapshot' => $category->issue_type,
+                    'duplicate_radius_snapshot_m' => $category->duplicate_radius_m,
+                    'geotag_tolerance_snapshot_m' => $category->geotag_tolerance_m,
+                    'sla_hours_snapshot' => $category->default_sla_hours,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+
+                foreach (array_values($beforePhotos) as $index => $photoFile) {
+                    $photo = $this->geotagValidator->processUpload(
+                        report: $report,
+                        file: $photoFile,
+                        type: PhotoType::BEFORE,
+                        cycle: 1,
+                        sequence: $index + 1,
+                        uploadedByUserId: $reporter->id,
+                    );
+                    $writtenFiles[] = $photo->file_path;
+                    $writtenFiles[] = $photo->thumbnail_path;
+                }
+
+                $this->auditLogger->log(
+                    actionType: AuditActionType::SUBMITTED,
                     report: $report,
-                    file: $photoFile,
-                    type: PhotoType::BEFORE,
-                    cycle: 1,
-                    sequence: $index + 1,
-                    uploadedByUserId: $reporter->id,
+                    actor: $reporter,
+                    fromStatus: null,
+                    toStatus: ReportStatus::SUBMITTED,
+                    note: 'Laporan dikirim oleh warga.',
                 );
+
+                $this->auditLogger->log(
+                    actionType: AuditActionType::ROUTED,
+                    report: $report,
+                    actor: null,
+                    fromStatus: ReportStatus::SUBMITTED,
+                    toStatus: ReportStatus::ROUTED_TO_UNIT,
+                    note: "Dirutekan otomatis ke {$targetUnit->name}.",
+                    metadata: ['opd_unit_code' => $targetUnit->code],
+                );
+
+                $this->notifier->notifyUsers(
+                    $this->notifier->getUnitAdminIds($targetUnit->id),
+                    NotificationType::REPORT_ROUTED,
+                    $report,
+                    "Laporan baru {$report->ticket_code} masuk untuk ditindaklanjuti unit {$targetUnit->name}."
+                );
+
+                return [
+                    'report' => $report->fresh(['category', 'opdUnit', 'district', 'village', 'photos']),
+                    'secret_token' => $plainToken,
+                ];
+            });
+        } catch (Throwable $e) {
+            if ($writtenFiles !== []) {
+                Storage::disk('public')->delete($writtenFiles);
             }
 
-            $this->auditLogger->log(
-                actionType: AuditActionType::SUBMITTED,
-                report: $report,
-                actor: $reporter,
-                fromStatus: null,
-                toStatus: ReportStatus::SUBMITTED,
-                note: 'Laporan dikirim oleh warga.',
-            );
-
-            $this->auditLogger->log(
-                actionType: AuditActionType::ROUTED,
-                report: $report,
-                actor: null,
-                fromStatus: ReportStatus::SUBMITTED,
-                toStatus: ReportStatus::ROUTED_TO_UNIT,
-                note: "Dirutekan otomatis ke {$targetUnit->name}.",
-                metadata: ['opd_unit_code' => $targetUnit->code],
-            );
-
-            $this->notifier->notifyUsers(
-                $this->notifier->getUnitAdminIds($targetUnit->id),
-                NotificationType::REPORT_ROUTED,
-                $report,
-                "Laporan baru {$report->ticket_code} masuk untuk ditindaklanjuti unit {$targetUnit->name}."
-            );
-
-            return [
-                'report' => $report->fresh(['category', 'opdUnit', 'district', 'village', 'photos']),
-                'secret_token' => $plainToken,
-            ];
-        });
+            throw $e;
+        }
     }
 
     /**
@@ -303,7 +332,14 @@ class ReportStateMachineService
             $locked = $this->lockReport($report);
             $this->assertUnitAdmin($admin, $locked);
             $this->assertStatus($locked, ReportStatus::ROUTED_TO_UNIT);
-            $this->assertOfficerEligibleForUnit($officer, (int) $locked->opd_unit_id);
+
+            $freshOfficer = User::query()->whereKey($officer->id)->lockForUpdate()->first();
+            if ($freshOfficer === null) {
+                throw ValidationException::withMessages([
+                    'officer_id' => ['Petugas tidak ditemukan.'],
+                ]);
+            }
+            $this->assertOfficerEligibleForUnit($freshOfficer, (int) $locked->opd_unit_id);
 
             $now = CarbonImmutable::now('UTC');
             $sanitizedNote = $note !== null ? $this->sanitizer->sanitize($note) : null;
@@ -311,7 +347,7 @@ class ReportStateMachineService
             $locked->update([
                 'status' => ReportStatus::IN_PROGRESS,
                 'resolution_track' => ResolutionTrack::OPERATIONAL,
-                'assigned_officer_id' => $officer->id,
+                'assigned_officer_id' => $freshOfficer->id,
                 'sla_started_at' => $now,
                 'sla_cycle_started_at' => $now,
                 'sla_deadline_at' => $now->addHours($locked->sla_hours_snapshot),
@@ -323,11 +359,11 @@ class ReportStateMachineService
                 actor: $admin,
                 fromStatus: ReportStatus::ROUTED_TO_UNIT,
                 toStatus: ReportStatus::IN_PROGRESS,
-                note: $sanitizedNote ?? "Ditugaskan kepada {$officer->name} (Jalur 1 Operasional).",
-                metadata: ['officer_id' => $officer->id],
+                note: $sanitizedNote ?? 'Petugas lapangan unit ditugaskan untuk penanganan operasional (Jalur 1).',
+                metadata: ['officer_id' => $freshOfficer->id],
             );
 
-            $recipients = array_merge($this->notifier->getReporterAndWatcherIds($locked), [$officer->id]);
+            $recipients = array_merge($this->notifier->getReporterAndWatcherIds($locked), [$freshOfficer->id]);
             $this->notifier->notifyUsers(
                 $recipients,
                 NotificationType::REPORT_ASSIGNED,
@@ -350,56 +386,69 @@ class ReportStateMachineService
         array $apbdData,
         ?UploadedFile $docProof = null,
     ): Report {
-        return DB::transaction(function () use ($report, $admin, $apbdData, $docProof): Report {
-            $locked = $this->lockReport($report);
-            $this->assertUnitAdmin($admin, $locked);
-            $this->assertStatus($locked, ReportStatus::ROUTED_TO_UNIT);
+        $writtenFiles = [];
 
-            $now = CarbonImmutable::now('UTC');
-            $docPath = $docProof !== null ? $this->storeApbdDocument($docProof) : null;
-            $sanitizedNote = $this->sanitizer->sanitize((string) ($apbdData['note'] ?? 'Dijadwalkan ke anggaran APBD.'));
+        try {
+            return DB::transaction(function () use ($report, $admin, $apbdData, $docProof, &$writtenFiles): Report {
+                $locked = $this->lockReport($report);
+                $this->assertUnitAdmin($admin, $locked);
+                $this->assertStatus($locked, ReportStatus::ROUTED_TO_UNIT);
 
-            $locked->update([
-                'status' => ReportStatus::BUDGET_SCHEDULED,
-                'resolution_track' => ResolutionTrack::APBD,
-            ]);
+                $now = CarbonImmutable::now('UTC');
+                $docPath = $docProof !== null ? $this->storeApbdDocument($docProof) : null;
+                if ($docPath !== null) {
+                    $writtenFiles[] = $docPath;
+                }
+                $sanitizedNote = $this->sanitizer->sanitize((string) ($apbdData['note'] ?? 'Dijadwalkan ke anggaran APBD.'));
 
-            BudgetSchedule::create([
-                'report_id' => $locked->id,
-                'fiscal_year' => (int) $apbdData['fiscal_year'],
-                'proposal_ref_number' => trim((string) $apbdData['proposal_ref_number']),
-                'target_quarter' => (string) $apbdData['target_quarter'],
-                'estimated_budget' => isset($apbdData['estimated_budget']) ? (float) $apbdData['estimated_budget'] : null,
-                'document_proof_path' => $docPath,
-                'document_due_at' => $this->slaEngine->calculateApbdDocumentDueAt($now),
-                'document_uploaded_at' => $docPath !== null ? $now : null,
-                'last_milestone_updated_at' => $now,
-                'created_by_user_id' => $admin->id,
-            ]);
+                $locked->update([
+                    'status' => ReportStatus::BUDGET_SCHEDULED,
+                    'resolution_track' => ResolutionTrack::APBD,
+                ]);
 
-            $this->auditLogger->log(
-                actionType: AuditActionType::BUDGET_SCHEDULED,
-                report: $locked,
-                actor: $admin,
-                fromStatus: ReportStatus::ROUTED_TO_UNIT,
-                toStatus: ReportStatus::BUDGET_SCHEDULED,
-                note: $sanitizedNote,
-                metadata: [
+                BudgetSchedule::create([
+                    'report_id' => $locked->id,
                     'fiscal_year' => (int) $apbdData['fiscal_year'],
-                    'target_quarter' => (string) $apbdData['target_quarter'],
                     'proposal_ref_number' => trim((string) $apbdData['proposal_ref_number']),
-                ],
-            );
+                    'target_quarter' => (string) $apbdData['target_quarter'],
+                    'estimated_budget' => isset($apbdData['estimated_budget']) ? (float) $apbdData['estimated_budget'] : null,
+                    'document_proof_path' => $docPath,
+                    'document_due_at' => $this->slaEngine->calculateApbdDocumentDueAt($now),
+                    'document_uploaded_at' => $docPath !== null ? $now : null,
+                    'last_milestone_updated_at' => $now,
+                    'created_by_user_id' => $admin->id,
+                ]);
 
-            $this->notifier->notifyUsers(
-                $this->notifier->getReporterAndWatcherIds($locked),
-                NotificationType::REPORT_APBD_SCHEDULED,
-                $locked,
-                "Laporan {$locked->ticket_code} dijadwalkan pada anggaran APBD {$apbdData['fiscal_year']} ({$apbdData['target_quarter']})."
-            );
+                $this->auditLogger->log(
+                    actionType: AuditActionType::BUDGET_SCHEDULED,
+                    report: $locked,
+                    actor: $admin,
+                    fromStatus: ReportStatus::ROUTED_TO_UNIT,
+                    toStatus: ReportStatus::BUDGET_SCHEDULED,
+                    note: $sanitizedNote,
+                    metadata: [
+                        'fiscal_year' => (int) $apbdData['fiscal_year'],
+                        'target_quarter' => (string) $apbdData['target_quarter'],
+                        'proposal_ref_number' => trim((string) $apbdData['proposal_ref_number']),
+                    ],
+                );
 
-            return $locked->fresh('budgetSchedule');
-        });
+                $this->notifier->notifyUsers(
+                    $this->notifier->getReporterAndWatcherIds($locked),
+                    NotificationType::REPORT_APBD_SCHEDULED,
+                    $locked,
+                    "Laporan {$locked->ticket_code} dijadwalkan pada anggaran APBD {$apbdData['fiscal_year']} ({$apbdData['target_quarter']})."
+                );
+
+                return $locked->fresh('budgetSchedule');
+            });
+        } catch (Throwable $e) {
+            if ($writtenFiles !== []) {
+                Storage::disk('public')->delete($writtenFiles);
+            }
+
+            throw $e;
+        }
     }
 
     /**
@@ -416,27 +465,45 @@ class ReportStateMachineService
             $locked = $this->lockReport($report);
             $this->assertUnitAdmin($admin, $locked);
             $this->assertStatus($locked, ReportStatus::BUDGET_SCHEDULED);
-            $this->assertOfficerEligibleForUnit($officer, (int) $locked->opd_unit_id);
+
+            $freshOfficer = User::query()->whereKey($officer->id)->lockForUpdate()->first();
+            if ($freshOfficer === null) {
+                throw ValidationException::withMessages([
+                    'officer_id' => ['Petugas tidak ditemukan.'],
+                ]);
+            }
+            $this->assertOfficerEligibleForUnit($freshOfficer, (int) $locked->opd_unit_id);
 
             $now = CarbonImmutable::now('UTC');
-            $slaDeadline = CarbonImmutable::parse($targetDate, 'Asia/Jakarta')->endOfDay()->utc();
+            $parsedTarget = CarbonImmutable::parse($targetDate, 'Asia/Jakarta');
+            $slaDeadline = $parsedTarget->endOfDay()->utc();
+            if ($slaDeadline->lte($now)) {
+                throw ValidationException::withMessages([
+                    'execution_target_date' => ['Tanggal target eksekusi APBD harus berada di masa depan.'],
+                ]);
+            }
+
+            $normalizedTargetDate = $parsedTarget->toDateString();
+            $schedule = BudgetSchedule::query()->where('report_id', $locked->id)->lockForUpdate()->first();
+            if ($schedule === null) {
+                throw new InvalidStateTransitionException('Data jadwal APBD tidak ditemukan untuk tiket ini.');
+            }
+
             $sanitizedNote = $note !== null ? $this->sanitizer->sanitize($note) : null;
 
             $locked->update([
                 'status' => ReportStatus::IN_PROGRESS,
-                'assigned_officer_id' => $officer->id,
+                'assigned_officer_id' => $freshOfficer->id,
                 'is_milestone_overdue' => false,
                 'sla_started_at' => $now,
                 'sla_cycle_started_at' => $now,
                 'sla_deadline_at' => $slaDeadline,
             ]);
 
-            BudgetSchedule::query()
-                ->where('report_id', $locked->id)
-                ->update([
-                    'execution_target_date' => $targetDate,
-                    'updated_at' => $now,
-                ]);
+            $schedule->update([
+                'execution_target_date' => $normalizedTargetDate,
+                'updated_at' => $now,
+            ]);
 
             $this->auditLogger->log(
                 actionType: AuditActionType::EXECUTION_STARTED,
@@ -444,19 +511,19 @@ class ReportStateMachineService
                 actor: $admin,
                 fromStatus: ReportStatus::BUDGET_SCHEDULED,
                 toStatus: ReportStatus::IN_PROGRESS,
-                note: $sanitizedNote ?? "Eksekusi APBD dimulai dengan target selesai {$targetDate}.",
+                note: $sanitizedNote ?? "Eksekusi APBD dimulai dengan target selesai {$normalizedTargetDate}.",
                 metadata: [
-                    'officer_id' => $officer->id,
-                    'execution_target_date' => $targetDate,
+                    'officer_id' => $freshOfficer->id,
+                    'execution_target_date' => $normalizedTargetDate,
                 ],
             );
 
-            $recipients = array_merge($this->notifier->getReporterAndWatcherIds($locked), [$officer->id]);
+            $recipients = array_merge($this->notifier->getReporterAndWatcherIds($locked), [$freshOfficer->id]);
             $this->notifier->notifyUsers(
                 $recipients,
                 NotificationType::REPORT_EXECUTION_STARTED,
                 $locked,
-                "Eksekusi lapangan proyek APBD untuk tiket {$locked->ticket_code} telah dimulai (target {$targetDate})."
+                "Eksekusi lapangan proyek APBD untuk tiket {$locked->ticket_code} telah dimulai (target {$normalizedTargetDate})."
             );
 
             return $locked->fresh('budgetSchedule');
@@ -476,78 +543,97 @@ class ReportStateMachineService
         ?float $deviceLat = null,
         ?float $deviceLng = null,
     ): Report {
-        if ($afterPhotos === []) {
+        if ($afterPhotos === [] || count($afterPhotos) > 3) {
             throw ValidationException::withMessages([
-                'photos' => ['Minimal 1 foto bukti selesai (After) wajib diunggah.'],
+                'photos' => ['Jumlah foto bukti selesai (After) wajib antara 1 hingga 3 foto.'],
             ]);
         }
 
-        return DB::transaction(function () use ($report, $officer, $actionNote, $afterPhotos, $deviceLat, $deviceLng): Report {
-            $locked = $this->lockReport($report);
-            $this->assertAssignedOfficer($officer, $locked);
+        $writtenFiles = [];
 
-            if (! $locked->status->isSlaRunning()) {
-                throw new InvalidStateTransitionException(
-                    'Bukti penyelesaian hanya dapat diunggah saat tiket berstatus IN_PROGRESS atau REOPENED_BY_AUDIT.'
+        try {
+            return DB::transaction(function () use ($report, $officer, $actionNote, $afterPhotos, $deviceLat, $deviceLng, &$writtenFiles): Report {
+                $locked = $this->lockReport($report);
+                $this->assertAssignedOfficer($officer, $locked);
+
+                if (! $locked->status->isSlaRunning()) {
+                    throw new InvalidStateTransitionException(
+                        'Bukti penyelesaian hanya dapat diunggah saat tiket berstatus IN_PROGRESS atau REOPENED_BY_AUDIT.'
+                    );
+                }
+
+                $fromStatus = $locked->status;
+                $savedPhotos = $this->geotagValidator->processAfterPhotos(
+                    report: $locked,
+                    files: $afterPhotos,
+                    deviceLat: $deviceLat,
+                    deviceLng: $deviceLng,
+                    uploadedByUserId: $officer->id,
+                    cycle: $locked->current_cycle,
                 );
+
+                foreach ($savedPhotos as $savedPhoto) {
+                    $writtenFiles[] = $savedPhoto->file_path;
+                    $writtenFiles[] = $savedPhoto->thumbnail_path;
+                }
+
+                $photoCollection = collect($savedPhotos);
+                $warningPhotos = $photoCollection->where('has_geotag_warning', true);
+                $hasGeotagWarning = $warningPhotos->isNotEmpty();
+
+                $representativePhoto = $hasGeotagWarning
+                    ? ($warningPhotos->sortByDesc(static fn ($photo): int => $photo->distance_from_report_m ?? -1)->first() ?? $savedPhotos[0])
+                    : $savedPhotos[0];
+
+                $now = CarbonImmutable::now('UTC');
+                $windowHours = (int) config('pastara.signoff_window_hours', 72);
+                $exceededDeadline = $locked->sla_deadline_at !== null && $now->gt($locked->sla_deadline_at);
+                $isLate = $locked->is_late || $exceededDeadline;
+                $sanitizedActionNote = $this->sanitizer->sanitize($actionNote);
+
+                $locked->update([
+                    'status' => ReportStatus::PENDING_CITIZEN_SIGN_OFF,
+                    'sla_paused_at' => $now,
+                    'signoff_started_at' => $now,
+                    'signoff_deadline_at' => $now->addHours($windowHours),
+                    'signoff_reminder_sent_at' => null,
+                    'is_sla_overdue' => $locked->is_sla_overdue || $exceededDeadline,
+                    'is_late' => $isLate,
+                    'geotag_warning' => $hasGeotagWarning,
+                    'geotag_distance_m' => $representativePhoto->distance_from_report_m,
+                    'officer_action_note' => $sanitizedActionNote,
+                ]);
+
+                $this->auditLogger->log(
+                    actionType: AuditActionType::EVIDENCE_SUBMITTED,
+                    report: $locked,
+                    actor: $officer,
+                    fromStatus: $fromStatus,
+                    toStatus: ReportStatus::PENDING_CITIZEN_SIGN_OFF,
+                    note: $sanitizedActionNote,
+                    metadata: [
+                        'cycle' => $locked->current_cycle,
+                        'geotag_warning' => $hasGeotagWarning,
+                        'geotag_distance_m' => $representativePhoto->distance_from_report_m,
+                    ],
+                );
+
+                $this->notifier->notifyUsers(
+                    $this->notifier->getReporterAndWatcherIds($locked),
+                    NotificationType::SIGN_OFF_REQUESTED,
+                    $locked,
+                    "Petugas mengunggah bukti penyelesaian untuk tiket {$locked->ticket_code}. Mohon konfirmasi dalam {$windowHours} jam."
+                );
+
+                return $locked->fresh('photos');
+            });
+        } catch (Throwable $e) {
+            if ($writtenFiles !== []) {
+                Storage::disk('public')->delete($writtenFiles);
             }
 
-            $fromStatus = $locked->status;
-            $savedPhotos = $this->geotagValidator->processAfterPhotos(
-                report: $locked,
-                files: $afterPhotos,
-                deviceLat: $deviceLat,
-                deviceLng: $deviceLng,
-                uploadedByUserId: $officer->id,
-                cycle: $locked->current_cycle,
-            );
-
-            $primaryPhoto = $savedPhotos[0];
-            $hasGeotagWarning = collect($savedPhotos)->contains(
-                static fn ($photo): bool => $photo->has_geotag_warning
-            );
-
-            $now = CarbonImmutable::now('UTC');
-            $windowHours = (int) config('pastara.signoff_window_hours', 72);
-            $isLate = $locked->is_late
-                || ($locked->sla_deadline_at !== null && $now->gt($locked->sla_deadline_at));
-            $sanitizedActionNote = $this->sanitizer->sanitize($actionNote);
-
-            $locked->update([
-                'status' => ReportStatus::PENDING_CITIZEN_SIGN_OFF,
-                'sla_paused_at' => $now,
-                'signoff_started_at' => $now,
-                'signoff_deadline_at' => $now->addHours($windowHours),
-                'signoff_reminder_sent_at' => null,
-                'is_late' => $isLate,
-                'geotag_warning' => $hasGeotagWarning,
-                'geotag_distance_m' => $primaryPhoto->distance_from_report_m,
-                'officer_action_note' => $sanitizedActionNote,
-            ]);
-
-            $this->auditLogger->log(
-                actionType: AuditActionType::EVIDENCE_SUBMITTED,
-                report: $locked,
-                actor: $officer,
-                fromStatus: $fromStatus,
-                toStatus: ReportStatus::PENDING_CITIZEN_SIGN_OFF,
-                note: $sanitizedActionNote,
-                metadata: [
-                    'cycle' => $locked->current_cycle,
-                    'geotag_warning' => $hasGeotagWarning,
-                    'geotag_distance_m' => $primaryPhoto->distance_from_report_m,
-                ],
-            );
-
-            $this->notifier->notifyUsers(
-                $this->notifier->getReporterAndWatcherIds($locked),
-                NotificationType::SIGN_OFF_REQUESTED,
-                $locked,
-                "Petugas mengunggah bukti penyelesaian untuk tiket {$locked->ticket_code}. Mohon konfirmasi dalam {$windowHours} jam."
-            );
-
-            return $locked->fresh('photos');
-        });
+            throw $e;
+        }
     }
 
     /**
@@ -568,6 +654,7 @@ class ReportStateMachineService
 
             $locked->update([
                 'status' => ReportStatus::VERIFIED_CLOSED,
+                'is_sla_overdue' => false,
                 'sla_stopped_at' => $now,
             ]);
 
@@ -610,68 +697,80 @@ class ReportStateMachineService
         string $reason,
         array $disputePhotos,
     ): Report {
-        if ($disputePhotos === []) {
+        if ($disputePhotos === [] || count($disputePhotos) > 3) {
             throw ValidationException::withMessages([
-                'photos' => ['Minimal 1 foto bukti penolakan (veto) wajib diunggah.'],
+                'photos' => ['Jumlah foto bukti penolakan (veto) wajib antara 1 hingga 3 foto.'],
             ]);
         }
 
-        return DB::transaction(function () use ($report, $actor, $secretToken, $reason, $disputePhotos): Report {
-            $locked = $this->lockReport($report);
-            $isReporter = $this->assertCitizenSignOffAuthorized($locked, $actor, $secretToken);
-            $this->assertSignOffWindowOpen($locked);
+        $writtenFiles = [];
 
-            $sanitizedReason = $this->sanitizer->sanitize($reason);
+        try {
+            return DB::transaction(function () use ($report, $actor, $secretToken, $reason, $disputePhotos, &$writtenFiles): Report {
+                $locked = $this->lockReport($report);
+                $isReporter = $this->assertCitizenSignOffAuthorized($locked, $actor, $secretToken);
+                $this->assertSignOffWindowOpen($locked);
 
-            foreach (array_values($disputePhotos) as $index => $photoFile) {
-                $this->geotagValidator->processUpload(
+                $sanitizedReason = $this->sanitizer->sanitize($reason);
+
+                foreach (array_values($disputePhotos) as $index => $photoFile) {
+                    $photo = $this->geotagValidator->processUpload(
+                        report: $locked,
+                        file: $photoFile,
+                        type: PhotoType::DISPUTE,
+                        cycle: $locked->current_cycle,
+                        sequence: $index + 1,
+                        uploadedByUserId: $isReporter ? $actor?->id : $locked->reporter_id,
+                    );
+                    $writtenFiles[] = $photo->file_path;
+                    $writtenFiles[] = $photo->thumbnail_path;
+                }
+
+                Dispute::create([
+                    'report_id' => $locked->id,
+                    'cycle' => $locked->current_cycle,
+                    'raised_by_user_id' => $locked->reporter_id,
+                    'citizen_reason' => $sanitizedReason,
+                    'status' => DisputeStatus::PENDING,
+                ]);
+
+                $locked->update([
+                    'status' => ReportStatus::DISPUTED,
+                ]);
+
+                $this->auditLogger->log(
+                    actionType: AuditActionType::CITIZEN_REJECTED,
                     report: $locked,
-                    file: $photoFile,
-                    type: PhotoType::DISPUTE,
-                    cycle: $locked->current_cycle,
-                    sequence: $index + 1,
-                    uploadedByUserId: $isReporter ? $actor?->id : $locked->reporter_id,
+                    actor: $isReporter ? $actor : null,
+                    fromStatus: ReportStatus::PENDING_CITIZEN_SIGN_OFF,
+                    toStatus: ReportStatus::DISPUTED,
+                    note: $sanitizedReason,
+                    metadata: ['cycle' => $locked->current_cycle],
+                    actorRoleOverride: 'WARGA',
                 );
+
+                $recipients = array_merge(
+                    $this->notifier->getInspectorateIds(),
+                    $this->notifier->getUnitAdminIds((int) $locked->opd_unit_id),
+                    $locked->assigned_officer_id !== null ? [$locked->assigned_officer_id] : []
+                );
+
+                $this->notifier->notifyUsers(
+                    $recipients,
+                    NotificationType::DISPUTE_RAISED,
+                    $locked,
+                    "Pelapor menolak klaim selesai untuk tiket {$locked->ticket_code}. Sengketa masuk sidang Inspektorat."
+                );
+
+                return $locked->fresh(['disputes', 'photos']);
+            });
+        } catch (Throwable $e) {
+            if ($writtenFiles !== []) {
+                Storage::disk('public')->delete($writtenFiles);
             }
 
-            Dispute::create([
-                'report_id' => $locked->id,
-                'cycle' => $locked->current_cycle,
-                'raised_by_user_id' => $locked->reporter_id,
-                'citizen_reason' => $sanitizedReason,
-                'status' => DisputeStatus::PENDING,
-            ]);
-
-            $locked->update([
-                'status' => ReportStatus::DISPUTED,
-            ]);
-
-            $this->auditLogger->log(
-                actionType: AuditActionType::CITIZEN_REJECTED,
-                report: $locked,
-                actor: $isReporter ? $actor : null,
-                fromStatus: ReportStatus::PENDING_CITIZEN_SIGN_OFF,
-                toStatus: ReportStatus::DISPUTED,
-                note: $sanitizedReason,
-                metadata: ['cycle' => $locked->current_cycle],
-                actorRoleOverride: 'WARGA',
-            );
-
-            $recipients = array_merge(
-                $this->notifier->getInspectorateIds(),
-                $this->notifier->getUnitAdminIds((int) $locked->opd_unit_id),
-                $locked->assigned_officer_id !== null ? [$locked->assigned_officer_id] : []
-            );
-
-            $this->notifier->notifyUsers(
-                $recipients,
-                NotificationType::DISPUTE_RAISED,
-                $locked,
-                "Pelapor menolak klaim selesai untuk tiket {$locked->ticket_code}. Sengketa masuk sidang Inspektorat."
-            );
-
-            return $locked->fresh(['disputes', 'photos']);
-        });
+            throw $e;
+        }
     }
 
     /**
@@ -690,6 +789,7 @@ class ReportStateMachineService
 
             $locked->update([
                 'status' => ReportStatus::AUTO_VERIFIED_CLOSED,
+                'is_sla_overdue' => false,
                 'sla_stopped_at' => $now,
             ]);
 
@@ -735,10 +835,11 @@ class ReportStateMachineService
         }
 
         return DB::transaction(function () use ($dispute, $auditor, $decision, $auditNotes, $reopenSlaHours): Report {
+            // Consistent parent-before-child lock order (Report -> Dispute) prevents deadlocks
+            $lockedReport = Report::query()->whereKey($dispute->report_id)->lockForUpdate()->firstOrFail();
             $lockedDispute = Dispute::query()->whereKey($dispute->id)->lockForUpdate()->firstOrFail();
-            $lockedReport = Report::query()->whereKey($lockedDispute->report_id)->lockForUpdate()->firstOrFail();
 
-            if ($lockedDispute->status !== DisputeStatus::PENDING || $lockedReport->status !== ReportStatus::DISPUTED) {
+            if ((int) $lockedDispute->report_id !== (int) $lockedReport->id || $lockedDispute->status !== DisputeStatus::PENDING || $lockedReport->status !== ReportStatus::DISPUTED) {
                 throw new InvalidStateTransitionException('Sengketa sudah diputus atau status tiket tidak lagi DISPUTED.');
             }
 
@@ -812,6 +913,7 @@ class ReportStateMachineService
 
                 $lockedReport->update([
                     'status' => ReportStatus::CLOSED_BY_AUDIT,
+                    'is_sla_overdue' => false,
                     'sla_stopped_at' => $now,
                 ]);
 
@@ -898,7 +1000,7 @@ class ReportStateMachineService
 
     private function assertCitizenSignOffAuthorized(Report $report, ?User $actor, ?string $secretToken): bool
     {
-        if ($actor !== null && $actor->role === UserRole::WARGA && (int) $actor->id === (int) $report->reporter_id) {
+        if ($actor !== null && $actor->is_active && $actor->role === UserRole::WARGA && (int) $actor->id === (int) $report->reporter_id) {
             return true;
         }
 
@@ -913,7 +1015,7 @@ class ReportStateMachineService
     {
         $this->assertStatus($report, ReportStatus::PENDING_CITIZEN_SIGN_OFF);
 
-        if ($report->signoff_deadline_at !== null && CarbonImmutable::now('UTC')->gt($report->signoff_deadline_at)) {
+        if ($report->signoff_deadline_at === null || CarbonImmutable::now('UTC')->gt($report->signoff_deadline_at)) {
             throw new InvalidStateTransitionException('Jendela waktu konfirmasi warga 72 jam telah berakhir.');
         }
     }
@@ -967,12 +1069,49 @@ class ReportStateMachineService
 
     private function storeApbdDocument(UploadedFile $file): string
     {
+        $realPath = $file->getRealPath() ?: $file->getPathname();
+        $rawContents = $realPath !== '' ? @file_get_contents($realPath) : false;
+
+        if ($rawContents === false || $rawContents === '') {
+            throw ValidationException::withMessages([
+                'document_proof' => ['Berkas dokumen bukti usulan APBD tidak dapat dibaca atau kosong.'],
+            ]);
+        }
+
+        $detectedMime = strtolower((string) $file->getMimeType());
         $now = CarbonImmutable::now('UTC');
-        $ext = strtolower($file->getClientOriginalExtension() ?: 'pdf');
-        $path = sprintf('documents/%s/%s/%s.%s', $now->format('Y'), $now->format('m'), Str::uuid(), $ext);
 
-        Storage::disk('public')->put($path, file_get_contents($file->getRealPath() ?: $file->getPathname()) ?: '');
+        if ($detectedMime === 'application/pdf') {
+            if (! str_starts_with($rawContents, '%PDF-')) {
+                throw ValidationException::withMessages([
+                    'document_proof' => ['Berkas PDF tidak valid atau rusak.'],
+                ]);
+            }
 
-        return $path;
+            $path = sprintf('documents/%s/%s/%s.pdf', $now->format('Y'), $now->format('m'), Str::uuid());
+            if (! Storage::disk('public')->put($path, $rawContents)) {
+                throw new RuntimeException('Gagal menyimpan dokumen bukti APBD ke penyimpanan.');
+            }
+
+            return $path;
+        }
+
+        if (in_array($detectedMime, ['image/jpeg', 'image/png'], true)) {
+            $imageManager = new ImageManager(Driver::class);
+            $image = $imageManager->decodePath($realPath);
+            $image->orient();
+            $encoded = (string) $image->encode(new WebpEncoder(quality: 85, strip: true));
+            $path = sprintf('documents/%s/%s/%s.webp', $now->format('Y'), $now->format('m'), Str::uuid());
+
+            if (! Storage::disk('public')->put($path, $encoded)) {
+                throw new RuntimeException('Gagal menyimpan dokumen gambar bukti APBD ke penyimpanan.');
+            }
+
+            return $path;
+        }
+
+        throw ValidationException::withMessages([
+            'document_proof' => ['Dokumen bukti usulan APBD hanya boleh berupa PDF, JPG, atau PNG yang valid.'],
+        ]);
     }
 }

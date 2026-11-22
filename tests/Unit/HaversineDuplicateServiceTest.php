@@ -104,12 +104,16 @@ it('detects nearby active POINT and LINEAR duplicates accurately while excluding
     $baseLat = -7.7188;
     $baseLng = 109.0154;
 
-    // 1° latitude ≈ 111,195 m → +0.00135° ≈ 150 m; +0.00270° ≈ 300 m; +0.00585° ≈ 650 m
+    // 1° latitude ≈ 111,195 m → +0.00045° ≈ 50 m; +0.00135° ≈ 150 m; +0.00270° ≈ 300 m; +0.00585° ≈ 650 m
     makeReportAt($fx, $fx['pointCat'], $baseLat + 0.00135, $baseLng, 'PST-PNT150M');
     makeReportAt($fx, $fx['pointCat'], $baseLat + 0.00270, $baseLng, 'PST-PNT300M');
     makeReportAt($fx, $fx['pointCat'], $baseLat + 0.00010, $baseLng, 'PST-PNTSECRET', ReportStatus::IN_PROGRESS, true);
     makeReportAt($fx, $fx['pointCat'], $baseLat + 0.00010, $baseLng, 'PST-PNTCLOSED', ReportStatus::VERIFIED_CLOSED, false);
+    makeReportAt($fx, $fx['pointCat'], $baseLat + 0.00010, $baseLng, 'PST-PNTAUTO', ReportStatus::AUTO_VERIFIED_CLOSED, false);
+    makeReportAt($fx, $fx['pointCat'], $baseLat + 0.00010, $baseLng, 'PST-PNTAUDIT', ReportStatus::CLOSED_BY_AUDIT, false);
     makeReportAt($fx, $fx['pointCat'], $baseLat + 0.00010, $baseLng, 'PST-PNTREJECT', ReportStatus::REJECTED, false);
+    // Different category at 50 m MUST NOT match POINT query (AC-018)
+    makeReportAt($fx, $fx['linearCat'], $baseLat + 0.00045, $baseLng, 'PST-LIN50M');
     makeReportAt($fx, $fx['linearCat'], $baseLat + 0.00585, $baseLng, 'PST-LIN650M');
     makeReportAt($fx, $fx['linearCat'], $baseLat + 0.00810, $baseLng, 'PST-LIN900M');
 
@@ -118,13 +122,13 @@ it('detects nearby active POINT and LINEAR duplicates accurately while excluding
         ->and($pointResult['matches'])->toHaveCount(1)
         ->and($pointResult['matches'][0]['ticket_code'])->toBe('PST-PNT150M')
         ->and($pointResult['matches'][0]['distance_m'])->toBeBetween(145, 155)
-        ->and($pointResult['matches'][0]['thumbnail_url'])->toContain('seed-before-thumb.webp');
+        ->and($pointResult['matches'][0]['thumbnail_url'])->toContain('seed-before-thumb.webp')
+        ->and($pointResult['matches'][0]['created_at'])->toMatch('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/');
 
     $linearResult = $service->findNearbyDuplicates($fx['linearCat']->id, $baseLat, $baseLng);
     expect($linearResult['radius_m'])->toBe(750)
-        ->and($linearResult['matches'])->toHaveCount(1)
-        ->and($linearResult['matches'][0]['ticket_code'])->toBe('PST-LIN650M')
-        ->and($linearResult['matches'][0]['distance_m'])->toBeBetween(640, 660);
+        ->and($linearResult['matches'])->toHaveCount(2)
+        ->and(array_column($linearResult['matches'], 'ticket_code'))->toBe(['PST-LIN50M', 'PST-LIN650M']);
 });
 
 it('limits nearby matches to 5 closest active tickets sorted by ascending distance', function (): void {

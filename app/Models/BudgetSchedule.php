@@ -28,7 +28,7 @@ class BudgetSchedule extends Model
     {
         return [
             'fiscal_year' => 'integer',
-            'estimated_budget' => 'float',
+            'estimated_budget' => 'decimal:2',
             'document_due_at' => 'immutable_datetime',
             'document_uploaded_at' => 'immutable_datetime',
             'last_milestone_updated_at' => 'immutable_datetime',

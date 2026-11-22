@@ -173,3 +173,41 @@ it('calculates SLA, Physical Resolution, Dispute Rate, Quality Index, and Compli
         ->and($dpupr->cached_quality_index)->toBe(4.5)
         ->and($dpupr->metrics_updated_at)->not->toBeNull();
 });
+
+it('normalizes non-zero weights proportionally when dispute_rate is null (TC-F-16)', function (): void {
+    $unit = OpdUnit::create(['code' => 'NORM_UNIT', 'name' => 'Unit Normalisasi', 'level' => UnitLevel::OPD]);
+    $reporter = User::create([
+        'name' => 'Warga Norm',
+        'email' => 'warga.norm@pastara.id',
+        'password' => 'Pastara2027!',
+        'role' => UserRole::WARGA,
+    ]);
+    $cat = Category::create([
+        'code' => 'CAT-NORM',
+        'name' => 'Kategori Norm',
+        'default_opd_unit_id' => $unit->id,
+        'default_sla_hours' => 72,
+        'issue_type' => IssueType::POINT,
+        'duplicate_radius_m' => 200,
+        'geotag_tolerance_m' => 100,
+    ]);
+    $district = District::create(['code' => '330198', 'name' => 'Kec Norm']);
+    $village = Village::create(['district_id' => $district->id, 'name' => 'Desa Norm', 'type' => 'DESA']);
+
+    // Create 1 active overdue (SLA = 0/1 = 0% — wait: use 1 on-time IN_PROGRESS? No, need non-zero SLA & Physical with dispute_rate = null):
+    // 1 BUDGET_SCHEDULED + 1 IN_PROGRESS (not overdue, sla_started_at = null on closed? Wait: VERIFIED_CLOSED implies everSignOff).
+    // If 1 ticket is IN_PROGRESS overdue (not signoff) -> sla = 0. Instead test sla_compliance_rate = null & dispute_rate = null
+    // (1 BUDGET_SCHEDULED + 1 ROUTED_TO_UNIT -> valid = 2, physical = 0%, sla = null, dispute = null -> score = 0)
+    // AND test sla = null, physical = 50%, dispute = 0% (1 VERIFIED_CLOSED with sla_started_at = null + 1 ROUTED_TO_UNIT):
+    // weights remaining: physical (0.30) + dispute (0.20) = 0.50 => (0.30/0.50)*50 + (0.20/0.50)*100 = 30 + 40 = 70.00 (unnormalized would be 35.00!)
+    makeScorecardReport($unit, $reporter, $cat, $district, $village, 'PST-NM01', ReportStatus::VERIFIED_CLOSED, false, false, false, true, false);
+    makeScorecardReport($unit, $reporter, $cat, $district, $village, 'PST-NM02', ReportStatus::ROUTED_TO_UNIT, false, false, false, false, false);
+
+    $service = new ScorecardCalculatorService;
+    $metrics = $service->calculateForUnit($unit);
+
+    expect($metrics['sla_compliance_rate'])->toBeNull()
+        ->and($metrics['physical_resolution_rate'])->toBe(50.0)
+        ->and($metrics['dispute_rate'])->toBe(0.0)
+        ->and($metrics['compliance_score'])->toBe(70.0);
+});

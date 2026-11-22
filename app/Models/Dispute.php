@@ -22,6 +22,10 @@ class Dispute extends Model
         'resolved_at',
     ];
 
+    protected $attributes = [
+        'status' => DisputeStatus::PENDING->value,
+    ];
+
     protected function casts(): array
     {
         return [
