@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Exceptions\EscrowLockViolationException;
 use App\Exceptions\InvalidStateTransitionException;
+use App\Http\Middleware\EnsureRole;
 use App\Http\Middleware\SecurityHeadersMiddleware;
 use App\Support\ApiResponse;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -17,6 +18,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -28,6 +30,9 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->append(SecurityHeadersMiddleware::class);
+        $middleware->alias([
+            'role' => EnsureRole::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
@@ -127,6 +132,19 @@ return Application::configure(basePath: dirname(__DIR__))
                 'Terlalu banyak percobaan. Coba lagi dalam beberapa saat.',
                 429
             );
+        });
+
+        $exceptions->render(function (HttpExceptionInterface $e, Request $request) use ($isApiRequest) {
+            if (! $isApiRequest($request)) {
+                return null;
+            }
+
+            return match ($e->getStatusCode()) {
+                403 => ApiResponse::error('FORBIDDEN', $e->getMessage() ?: 'Anda tidak memiliki izin untuk melakukan aksi ini.', 403),
+                404 => ApiResponse::error('NOT_FOUND', $e->getMessage() ?: 'Data tidak ditemukan.', 404),
+                409 => ApiResponse::error('INVALID_STATE_TRANSITION', $e->getMessage() ?: 'Status laporan telah berubah atau transisi tidak diizinkan.', 409),
+                default => null,
+            };
         });
 
         $exceptions->render(function (Throwable $e, Request $request) use ($isApiRequest) {

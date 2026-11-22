@@ -28,6 +28,7 @@ use App\Models\ReportPhoto;
 use App\Models\ReportUpvote;
 use App\Models\User;
 use App\Models\Village;
+use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
@@ -364,7 +365,7 @@ class CilacapSimulationSeeder extends Seeder
 
     private function seedHeroTickets(): void
     {
-        $now = now('UTC');
+        $now = CarbonImmutable::now('UTC');
         $wargaDemo = $this->users['warga.demo@pastara.id'];
 
         // 1. PST-SADA2027 — Jalur 2 APBD (Sadabumi)
@@ -597,7 +598,7 @@ class CilacapSimulationSeeder extends Seeder
 
     private function seedBackgroundTickets(): void
     {
-        $now = now('UTC');
+        $now = CarbonImmutable::now('UTC');
         $statusPool = [
             ReportStatus::ROUTED_TO_UNIT,
             ReportStatus::ROUTED_TO_UNIT,
