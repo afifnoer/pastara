@@ -31,8 +31,10 @@ class ReassignOfficerRequest extends FormRequest
 
         return [
             'officer_id' => [
+                'bail',
                 'required',
                 'integer',
+                'min:1',
                 Rule::exists('users', 'id')
                     ->where('role', UserRole::PETUGAS->value)
                     ->where('is_active', true)

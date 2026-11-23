@@ -34,14 +34,17 @@ class StoreReportRequest extends FormRequest
     {
         $bounds = config('pastara.cilacap');
         $rawDistrict = $this->input('district_id');
-        $districtId = is_numeric($rawDistrict) ? (int) $rawDistrict : 0;
+        $parsedDistrict = is_scalar($rawDistrict) ? filter_var($rawDistrict, FILTER_VALIDATE_INT) : false;
+        $districtId = ($parsedDistrict !== false && $parsedDistrict > 0) ? (int) $parsedDistrict : 0;
 
         return [
-            'category_id' => ['required', 'integer', Rule::exists('categories', 'id')->where('is_active', true)],
-            'district_id' => ['required', 'integer', 'exists:districts,id'],
+            'category_id' => ['bail', 'required', 'integer', 'min:1', Rule::exists('categories', 'id')->where('is_active', true)],
+            'district_id' => ['bail', 'required', 'integer', 'min:1', 'exists:districts,id'],
             'village_id' => [
+                'bail',
                 'required',
                 'integer',
+                'min:1',
                 Rule::exists('villages', 'id')->where(
                     static fn ($query) => $query->where('district_id', $districtId)
                 ),

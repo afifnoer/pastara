@@ -30,14 +30,18 @@ class RerouteReportRequest extends FormRequest
 
         return [
             'target_opd_unit_id' => [
+                'bail',
                 'required',
                 'integer',
+                'min:1',
                 Rule::exists('opd_units', 'id')->where('is_active', true),
                 Rule::notIn([$currentUnitId]),
             ],
             'new_category_id' => [
+                'bail',
                 'nullable',
                 'integer',
+                'min:1',
                 Rule::exists('categories', 'id')->where('is_active', true),
             ],
             'note' => ['required', 'string', 'min:20', 'max:500'],

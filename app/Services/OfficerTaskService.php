@@ -7,14 +7,17 @@ namespace App\Services;
 use App\Enums\AuditActionType;
 use App\Enums\PhotoType;
 use App\Enums\ReportStatus;
+use App\Enums\UserRole;
 use App\Exceptions\InvalidStateTransitionException;
 use App\Models\Report;
 use App\Models\ReportPhoto;
 use App\Models\User;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Throwable;
 
 class OfficerTaskService
@@ -94,6 +97,15 @@ class OfficerTaskService
             $updated = DB::transaction(function () use ($report, $officer, $note, $photos, &$writtenFiles): Report {
                 $locked = Report::query()->whereKey($report->id)->lockForUpdate()->firstOrFail();
 
+                $freshOfficer = User::query()->whereKey($officer->id)->first();
+                if ($freshOfficer === null || ! $freshOfficer->is_active || $freshOfficer->role !== UserRole::PETUGAS) {
+                    throw new AuthorizationException('Anda tidak memiliki izin untuk memperbarui progres tugas.');
+                }
+
+                if ((int) $locked->assigned_officer_id !== (int) $freshOfficer->id) {
+                    throw new NotFoundHttpException('Data tidak ditemukan.');
+                }
+
                 if (! $locked->status->isSlaRunning()) {
                     throw new InvalidStateTransitionException(
                         'Catatan progres hanya dapat ditambahkan saat tugas berstatus IN_PROGRESS atau REOPENED_BY_AUDIT.'
@@ -114,7 +126,7 @@ class OfficerTaskService
                         type: PhotoType::PROGRESS,
                         cycle: $locked->current_cycle,
                         sequence: $nextSequence,
-                        uploadedByUserId: $officer->id,
+                        uploadedByUserId: $freshOfficer->id,
                     );
                     $writtenFiles[] = $saved->file_path;
                     $writtenFiles[] = $saved->thumbnail_path;
@@ -125,7 +137,7 @@ class OfficerTaskService
                 $this->auditLogger->log(
                     actionType: AuditActionType::PROGRESS_NOTE,
                     report: $locked,
-                    actor: $officer,
+                    actor: $freshOfficer,
                     fromStatus: $locked->status,
                     toStatus: $locked->status,
                     note: $sanitizedNote,

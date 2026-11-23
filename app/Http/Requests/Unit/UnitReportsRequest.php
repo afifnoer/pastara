@@ -33,7 +33,7 @@ class UnitReportsRequest extends FormRequest
     {
         return [
             'tab' => ['nullable', 'string', 'in:verification,in_progress,apbd,sign_off,disputed,closed,rejected'],
-            'category_id' => ['nullable', 'integer', 'exists:categories,id'],
+            'category_id' => ['bail', 'nullable', 'integer', 'min:1', 'exists:categories,id'],
             'overdue_only' => ['nullable', 'boolean'],
             'page' => ['nullable', 'integer', 'min:1'],
         ];

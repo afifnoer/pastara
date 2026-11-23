@@ -15,12 +15,14 @@ use App\Models\BudgetSchedule;
 use App\Models\Report;
 use App\Models\User;
 use Carbon\CarbonImmutable;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Throwable;
 
 class UnitReportService
@@ -163,6 +165,7 @@ class UnitReportService
     {
         $updated = DB::transaction(function () use ($report, $admin, $newOfficerId, $reason): Report {
             $locked = Report::query()->whereKey($report->id)->lockForUpdate()->firstOrFail();
+            $freshAdmin = $this->assertActiveUnitAdmin($admin, $locked);
 
             if (! $locked->status->isSlaRunning()) {
                 throw new InvalidStateTransitionException(
@@ -196,16 +199,18 @@ class UnitReportService
                 'assigned_officer_id' => $newOfficer->id,
             ]);
 
+            // Keep public audit note generic (BR-039, FR-042); store internal staffing reason only in metadata
             $this->auditLogger->log(
                 actionType: AuditActionType::OFFICER_CHANGED,
                 report: $locked,
-                actor: $admin,
+                actor: $freshAdmin,
                 fromStatus: $locked->status,
                 toStatus: $locked->status,
-                note: $sanitizedReason,
+                note: 'Penugasan lapangan dialihkan ke petugas lain oleh Admin Unit.',
                 metadata: [
                     'from_officer_id' => $previousOfficerId,
                     'to_officer_id' => $newOfficer->id,
+                    'internal_reason' => $sanitizedReason,
                 ],
             );
 
@@ -293,6 +298,7 @@ class UnitReportService
                 &$writtenFiles,
             ): Report {
                 $locked = Report::query()->whereKey($report->id)->lockForUpdate()->firstOrFail();
+                $freshAdmin = $this->assertActiveUnitAdmin($admin, $locked);
 
                 if ($locked->status !== ReportStatus::BUDGET_SCHEDULED) {
                     throw new InvalidStateTransitionException(
@@ -331,7 +337,7 @@ class UnitReportService
 
                 $milestone = BudgetMilestone::create([
                     'budget_schedule_id' => $schedule->id,
-                    'updated_by_user_id' => $admin->id,
+                    'updated_by_user_id' => $freshAdmin->id,
                     'quarter_label' => $cleanQuarter,
                     'progress_note' => $sanitizedNote,
                     'attachment_path' => $attachmentPath,
@@ -352,7 +358,7 @@ class UnitReportService
                 $this->auditLogger->log(
                     actionType: AuditActionType::MILESTONE_UPDATED,
                     report: $locked,
-                    actor: $admin,
+                    actor: $freshAdmin,
                     fromStatus: ReportStatus::BUDGET_SCHEDULED,
                     toStatus: ReportStatus::BUDGET_SCHEDULED,
                     note: $sanitizedNote,
@@ -397,6 +403,20 @@ class UnitReportService
         $updated = $this->stateMachine->startApbdExecution($report, $admin, $targetDate, $officer, $note);
 
         return $updated->load(self::UNIT_RELATIONS);
+    }
+
+    private function assertActiveUnitAdmin(User $admin, Report $locked): User
+    {
+        $freshAdmin = User::query()->whereKey($admin->id)->first();
+        if ($freshAdmin === null || ! $freshAdmin->is_active || $freshAdmin->role !== UserRole::ADMIN_UNIT) {
+            throw new AuthorizationException('Anda tidak memiliki izin untuk mengelola tiket unit kerja ini.');
+        }
+
+        if ((int) $freshAdmin->opd_unit_id !== (int) $locked->opd_unit_id) {
+            throw new NotFoundHttpException('Data tidak ditemukan.');
+        }
+
+        return $freshAdmin;
     }
 
     private function resolveQuarterEndUtc(int $fiscalYear, string $targetQuarter): CarbonImmutable

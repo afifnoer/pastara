@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Enums\AuditActionType;
+use App\Enums\UserRole;
 use App\Models\Report;
 use App\Models\ReportUpvote;
 use App\Models\User;
 use Carbon\CarbonImmutable;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -96,9 +98,21 @@ class CitizenReportService
             return DB::transaction(function () use ($report, $citizen): array {
                 $locked = Report::query()->whereKey($report->id)->lockForUpdate()->firstOrFail();
 
+                $freshCitizen = User::query()->whereKey($citizen->id)->first();
+                if (
+                    $freshCitizen === null
+                    || ! $freshCitizen->is_active
+                    || $freshCitizen->role !== UserRole::WARGA
+                    || $locked->is_secret
+                    || (int) $locked->reporter_id === (int) $freshCitizen->id
+                    || $locked->status->isFinal()
+                ) {
+                    throw new AuthorizationException('Anda tidak diizinkan memberi dukungan pada laporan ini.');
+                }
+
                 $alreadyUpvoted = ReportUpvote::query()
                     ->where('report_id', $locked->id)
-                    ->where('user_id', $citizen->id)
+                    ->where('user_id', $freshCitizen->id)
                     ->exists();
 
                 if ($alreadyUpvoted) {
@@ -107,7 +121,7 @@ class CitizenReportService
 
                 ReportUpvote::create([
                     'report_id' => $locked->id,
-                    'user_id' => $citizen->id,
+                    'user_id' => $freshCitizen->id,
                     'is_watching' => true,
                     'created_at' => CarbonImmutable::now('UTC'),
                 ]);
@@ -118,7 +132,7 @@ class CitizenReportService
                 $this->auditLogger->log(
                     actionType: AuditActionType::UPVOTED,
                     report: $locked,
-                    actor: $citizen,
+                    actor: $freshCitizen,
                     fromStatus: $locked->status,
                     toStatus: $locked->status,
                     note: 'Warga memberikan dukungan (+1 Upvote) dan memantau tiket.',

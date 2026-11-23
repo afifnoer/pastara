@@ -21,7 +21,7 @@ class NearbyReportRequest extends FormRequest
         $bounds = config('pastara.cilacap');
 
         return [
-            'category_id' => ['required', 'integer', 'exists:categories,id'],
+            'category_id' => ['bail', 'required', 'integer', 'min:1', 'exists:categories,id'],
             'latitude' => ['required', 'numeric', "between:{$bounds['min_lat']},{$bounds['max_lat']}"],
             'longitude' => ['required', 'numeric', "between:{$bounds['min_lng']},{$bounds['max_lng']}"],
         ];

@@ -34,7 +34,7 @@ class ReportPolicy
 
     public function viewUnit(User $user, Report $report): Response
     {
-        if ($user->role !== UserRole::ADMIN_UNIT) {
+        if (! $user->is_active || $user->role !== UserRole::ADMIN_UNIT) {
             return Response::deny('Anda tidak memiliki izin untuk mengakses kotak masuk unit.');
         }
 
@@ -81,7 +81,7 @@ class ReportPolicy
 
     public function viewOfficerTask(User $user, Report $report): Response
     {
-        if ($user->role !== UserRole::PETUGAS) {
+        if (! $user->is_active || $user->role !== UserRole::PETUGAS) {
             return Response::deny('Anda tidak memiliki izin untuk mengakses tugas petugas.');
         }
 
