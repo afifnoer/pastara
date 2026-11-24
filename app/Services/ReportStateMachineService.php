@@ -863,6 +863,12 @@ class ReportStateMachineService
         }
 
         return DB::transaction(function () use ($dispute, $auditor, $decision, $auditNotes, $reopenSlaHours): Report {
+            $freshAuditor = User::query()->whereKey($auditor->id)->first();
+            if ($freshAuditor === null || $freshAuditor->role !== UserRole::INSPEKTORAT || ! $freshAuditor->is_active) {
+                throw new AuthorizationException('Hanya auditor Inspektorat aktif yang berhak memutus sengketa.');
+            }
+            $auditor = $freshAuditor;
+
             // Consistent parent-before-child lock order (Report -> Dispute) prevents deadlocks
             $lockedReport = Report::query()->whereKey($dispute->report_id)->lockForUpdate()->firstOrFail();
             $lockedDispute = Dispute::query()->whereKey($dispute->id)->lockForUpdate()->firstOrFail();
