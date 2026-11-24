@@ -26,4 +26,16 @@ class NearbyReportRequest extends FormRequest
             'longitude' => ['required', 'numeric', "between:{$bounds['min_lng']},{$bounds['max_lng']}"],
         ];
     }
+
+    /**
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return [
+            'latitude.between' => 'Lokasi berada di luar wilayah Kabupaten Cilacap.',
+            'longitude.between' => 'Lokasi berada di luar wilayah Kabupaten Cilacap.',
+            'category_id.exists' => 'Kategori laporan tidak ditemukan.',
+        ];
+    }
 }

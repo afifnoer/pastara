@@ -6,17 +6,18 @@ namespace App\Services;
 
 use App\Enums\AuditActionType;
 use App\Enums\UserRole;
+use App\Exceptions\DuplicateUpvoteException;
+use App\Exceptions\InvalidStateTransitionException;
 use App\Models\Report;
 use App\Models\ReportUpvote;
 use App\Models\User;
-use Carbon\CarbonImmutable;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
-use Symfony\Component\HttpKernel\Exception\HttpException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 class CitizenReportService
 {
@@ -29,7 +30,6 @@ class CitizenReportService
         'reporter',
         'category',
         'opdUnit',
-        'assignedOfficer',
         'district',
         'village',
         'photos',
@@ -116,14 +116,13 @@ class CitizenReportService
                     ->exists();
 
                 if ($alreadyUpvoted) {
-                    throw new HttpException(409, 'Anda sudah memberikan dukungan pada laporan ini.');
+                    throw new DuplicateUpvoteException;
                 }
 
                 ReportUpvote::create([
                     'report_id' => $locked->id,
                     'user_id' => $freshCitizen->id,
                     'is_watching' => true,
-                    'created_at' => CarbonImmutable::now('UTC'),
                 ]);
 
                 $locked->increment('upvote_count');
@@ -146,7 +145,7 @@ class CitizenReportService
                 ];
             });
         } catch (UniqueConstraintViolationException) {
-            throw new HttpException(409, 'Anda sudah memberikan dukungan pada laporan ini.');
+            throw new DuplicateUpvoteException;
         }
     }
 
@@ -157,10 +156,20 @@ class CitizenReportService
      */
     public function updateWatchStatus(Report $report, User $citizen, bool $isWatching): array
     {
+        if ($report->is_secret) {
+            throw new NotFoundHttpException('Data tidak ditemukan.');
+        }
+
         $upvote = ReportUpvote::query()
             ->where('report_id', $report->id)
             ->where('user_id', $citizen->id)
             ->firstOrFail();
+
+        if ($isWatching && $report->status->isFinal()) {
+            throw new InvalidStateTransitionException(
+                'Laporan yang sudah selesai atau ditolak tidak dapat diaktifkan kembali pemantauannya.'
+            );
+        }
 
         $upvote->update(['is_watching' => $isWatching]);
 

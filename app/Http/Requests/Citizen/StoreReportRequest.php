@@ -19,9 +19,11 @@ class StoreReportRequest extends FormRequest
         if ($this->has('is_secret')) {
             $raw = $this->input('is_secret');
             if (is_string($raw)) {
-                $parsed = filter_var($raw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
-                if ($parsed !== null) {
-                    $this->merge(['is_secret' => $parsed]);
+                $normalized = strtolower(trim($raw));
+                if (in_array($normalized, ['true', '1'], true)) {
+                    $this->merge(['is_secret' => true]);
+                } elseif (in_array($normalized, ['false', '0'], true)) {
+                    $this->merge(['is_secret' => false]);
                 }
             }
         }
@@ -57,6 +59,24 @@ class StoreReportRequest extends FormRequest
             'is_secret' => ['required', 'boolean'],
             'photos' => ['required', 'array', 'min:1', 'max:3'],
             'photos.*' => ['required', 'file', 'image', 'mimetypes:image/jpeg,image/png,image/webp', 'max:5120'],
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return [
+            'latitude.between' => 'Lokasi berada di luar wilayah Kabupaten Cilacap.',
+            'longitude.between' => 'Lokasi berada di luar wilayah Kabupaten Cilacap.',
+            'category_id.exists' => 'Kategori laporan tidak ditemukan atau sedang tidak aktif.',
+            'district_id.exists' => 'Kecamatan tidak ditemukan.',
+            'village_id.exists' => 'Desa/kelurahan tidak berada pada kecamatan yang dipilih.',
+            'photos.required' => 'Minimal 1 foto bukti kondisi awal wajib diunggah.',
+            'photos.min' => 'Minimal 1 foto bukti kondisi awal wajib diunggah.',
+            'photos.max' => 'Maksimal 3 foto yang dapat diunggah.',
+            'photos.*.max' => 'Ukuran setiap foto maksimal 5 MB.',
         ];
     }
 }

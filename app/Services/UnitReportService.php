@@ -122,11 +122,10 @@ class UnitReportService
         $activeTaskStatuses = [
             ReportStatus::IN_PROGRESS->value,
             ReportStatus::REOPENED_BY_AUDIT->value,
-            ReportStatus::PENDING_CITIZEN_SIGN_OFF->value,
-            ReportStatus::DISPUTED->value,
         ];
 
         return User::query()
+            ->select(['id', 'name', 'email', 'phone'])
             ->where('role', UserRole::PETUGAS->value)
             ->where('opd_unit_id', (int) $admin->opd_unit_id)
             ->where('is_active', true)
@@ -135,7 +134,7 @@ class UnitReportService
             ])
             ->orderBy('active_tasks_count')
             ->orderBy('name')
-            ->get(['id', 'name', 'email', 'phone'])
+            ->get()
             ->map(static fn (User $officer): array => [
                 'id' => $officer->id,
                 'name' => $officer->name,
@@ -214,17 +213,22 @@ class UnitReportService
                 ],
             );
 
-            $recipients = [$newOfficer->id];
-            if ($previousOfficerId !== null) {
-                $recipients[] = (int) $previousOfficerId;
-            }
-
             $this->notifier->notifyUsers(
-                $recipients,
+                [$newOfficer->id],
                 NotificationType::REPORT_ASSIGNED,
                 $locked,
-                "Penugasan lapangan untuk tiket {$locked->ticket_code} telah diperbarui oleh Admin Unit."
+                "Anda ditugaskan menangani tiket {$locked->ticket_code} melalui pengalihan oleh Admin Unit."
             );
+
+            if ($previousOfficerId !== null) {
+                $this->notifier->notifyUsers(
+                    [(int) $previousOfficerId],
+                    NotificationType::REPORT_ASSIGNED,
+                    $locked,
+                    "Penugasan Anda pada tiket {$locked->ticket_code} telah dialihkan ke petugas lain oleh Admin Unit.",
+                    'Penugasan Lapangan Dialihkan'
+                );
+            }
 
             return $locked->fresh();
         });
@@ -286,6 +290,7 @@ class UnitReportService
         ?UploadedFile $attachment = null,
     ): Report {
         $writtenFiles = [];
+        $replacedDocumentPath = null;
 
         try {
             $updated = DB::transaction(function () use (
@@ -296,6 +301,7 @@ class UnitReportService
                 $documentProof,
                 $attachment,
                 &$writtenFiles,
+                &$replacedDocumentPath,
             ): Report {
                 $locked = Report::query()->whereKey($report->id)->lockForUpdate()->firstOrFail();
                 $freshAdmin = $this->assertActiveUnitAdmin($admin, $locked);
@@ -313,7 +319,7 @@ class UnitReportService
 
                 $now = CarbonImmutable::now('UTC');
                 $sanitizedNote = $this->sanitizer->sanitize($progressNote);
-                $cleanQuarter = trim($quarterLabel);
+                $cleanQuarter = strtoupper(trim($quarterLabel));
 
                 $scheduleUpdates = [
                     'last_milestone_updated_at' => $now,
@@ -322,8 +328,14 @@ class UnitReportService
                 if ($documentProof !== null) {
                     $docPath = $this->stateMachine->storeApbdDocument($documentProof, 'document_proof');
                     $writtenFiles[] = $docPath;
+                    if ($schedule->document_proof_path !== null) {
+                        $replacedDocumentPath = $schedule->document_proof_path;
+                    }
                     $scheduleUpdates['document_proof_path'] = $docPath;
-                    $scheduleUpdates['document_uploaded_at'] = $now;
+                    // Preserve original document_uploaded_at to retain proof of on-time initial RKA upload
+                    if ($schedule->document_uploaded_at === null) {
+                        $scheduleUpdates['document_uploaded_at'] = $now;
+                    }
                 }
 
                 $attachmentPath = null;
@@ -373,7 +385,8 @@ class UnitReportService
                     $this->notifier->getReporterAndWatcherIds($locked),
                     NotificationType::REPORT_APBD_SCHEDULED,
                     $locked,
-                    "Pembaruan milestone APBD ({$cleanQuarter}) untuk tiket {$locked->ticket_code}: {$sanitizedNote}"
+                    "Pembaruan milestone APBD ({$cleanQuarter}) untuk tiket {$locked->ticket_code}: {$sanitizedNote}",
+                    'Pembaruan Milestone APBD'
                 );
 
                 return $locked->fresh();
@@ -384,6 +397,10 @@ class UnitReportService
             }
 
             throw $e;
+        }
+
+        if ($replacedDocumentPath !== null && ! in_array($replacedDocumentPath, $writtenFiles, true)) {
+            Storage::disk('public')->delete($replacedDocumentPath);
         }
 
         return $updated->load(self::UNIT_RELATIONS);

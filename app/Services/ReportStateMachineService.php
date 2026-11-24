@@ -125,7 +125,10 @@ class ReportStateMachineService
                 }
 
                 $targetUnit = $this->resolveTargetUnit($category, $village);
-                $isSecret = (bool) ($payload['is_secret'] ?? false);
+                $rawSecret = $payload['is_secret'] ?? false;
+                $isSecret = is_bool($rawSecret)
+                    ? $rawSecret
+                    : in_array(strtolower(trim((string) $rawSecret)), ['true', '1'], true);
                 $plainToken = $isSecret ? $this->generateSecretToken() : null;
                 $now = CarbonImmutable::now('UTC');
 
@@ -154,8 +157,6 @@ class ReportStateMachineService
                     'duplicate_radius_snapshot_m' => $category->duplicate_radius_m,
                     'geotag_tolerance_snapshot_m' => $category->geotag_tolerance_m,
                     'sla_hours_snapshot' => $category->default_sla_hours,
-                    'created_at' => $now,
-                    'updated_at' => $now,
                 ]);
 
                 foreach (array_values($beforePhotos) as $index => $photoFile) {
@@ -281,6 +282,14 @@ class ReportStateMachineService
                 NotificationType::REPORT_ROUTED,
                 $locked,
                 "Tiket {$locked->ticket_code} dialihkan dari {$fromUnitName} ke {$targetUnit->name}."
+            );
+
+            $this->notifier->notifyUsers(
+                [(int) $locked->reporter_id],
+                NotificationType::REPORT_ROUTED,
+                $locked,
+                "Laporan {$locked->ticket_code} dialihkan dari {$fromUnitName} ke {$targetUnit->name} untuk ditindaklanjuti.",
+                'Laporan Dialihkan ke Unit Lain'
             );
 
             return $locked->fresh();
@@ -1052,7 +1061,14 @@ class ReportStateMachineService
                 return $village->opdUnit;
             }
 
-            return OpdUnit::query()->where('code', 'DESA_UMUM')->where('is_active', true)->firstOrFail();
+            $fallbackUnit = OpdUnit::query()->where('code', 'DESA_UMUM')->where('is_active', true)->first();
+            if ($fallbackUnit === null) {
+                throw ValidationException::withMessages([
+                    'village_id' => ['Unit kerja desa umum (DESA_UMUM) sedang tidak aktif.'],
+                ]);
+            }
+
+            return $fallbackUnit;
         }
 
         $unit = OpdUnit::query()->whereKey($category->default_opd_unit_id)->where('is_active', true)->first();

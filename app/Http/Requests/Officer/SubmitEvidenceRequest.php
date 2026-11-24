@@ -29,8 +29,8 @@ class SubmitEvidenceRequest extends FormRequest
             'action_note' => ['required', 'string', 'min:20', 'max:1000'],
             'photos' => ['required', 'array', 'min:1', 'max:3'],
             'photos.*' => ['required', 'file', 'image', 'mimetypes:image/jpeg,image/png,image/webp', 'max:5120'],
-            'device_latitude' => ['nullable', 'numeric', 'between:-90,90'],
-            'device_longitude' => ['nullable', 'numeric', 'between:-180,180'],
+            'device_latitude' => ['nullable', 'required_with:device_longitude', 'numeric', 'between:-90,90'],
+            'device_longitude' => ['nullable', 'required_with:device_latitude', 'numeric', 'between:-180,180'],
         ];
     }
 }

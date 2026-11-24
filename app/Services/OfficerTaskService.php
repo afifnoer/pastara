@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Enums\AuditActionType;
+use App\Enums\NotificationType;
 use App\Enums\PhotoType;
 use App\Enums\ReportStatus;
 use App\Enums\UserRole;
@@ -45,6 +46,7 @@ class OfficerTaskService
         private readonly ReportStateMachineService $stateMachine,
         private readonly GeotagValidationService $geotagValidator,
         private readonly AuditLoggerService $auditLogger,
+        private readonly NotificationDispatcherService $notifier,
         private readonly TextSanitizerService $sanitizer,
     ) {}
 
@@ -76,7 +78,6 @@ class OfficerTaskService
                 ReportStatus::IN_PROGRESS->value,
                 ReportStatus::REOPENED_BY_AUDIT->value,
             ])
-                ->orderByRaw('sla_deadline_at IS NULL ASC')
                 ->orderBy('sla_deadline_at')
                 ->orderBy('id');
         }
@@ -145,6 +146,14 @@ class OfficerTaskService
                         'cycle' => $locked->current_cycle,
                         'photos_count' => count($photos),
                     ],
+                );
+
+                $this->notifier->notifyUsers(
+                    $this->notifier->getReporterAndWatcherIds($locked),
+                    NotificationType::REPORT_ASSIGNED,
+                    $locked,
+                    "Pembaruan progres lapangan untuk tiket {$locked->ticket_code}: {$sanitizedNote}",
+                    'Pembaruan Progres Lapangan'
                 );
 
                 return $locked->fresh();

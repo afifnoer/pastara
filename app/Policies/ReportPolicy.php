@@ -115,6 +115,17 @@ class ReportPolicy
             : Response::deny('Anda tidak diizinkan memberi dukungan pada laporan ini.');
     }
 
+    public function watch(User $user, Report $report): Response
+    {
+        if (! $user->is_active || $user->role !== UserRole::WARGA) {
+            return Response::deny('Hanya akun warga aktif yang dapat mengatur pemantauan laporan.');
+        }
+
+        return ! $report->is_secret
+            ? Response::allow()
+            : Response::denyAsNotFound('Data tidak ditemukan.');
+    }
+
     /**
      * Authorize citizen sign-off (owner Bearer or secret_token).
      * Note: For internal-role approve attempts, controllers MUST invoke

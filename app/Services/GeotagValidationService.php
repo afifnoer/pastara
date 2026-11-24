@@ -114,21 +114,27 @@ class GeotagValidationService
             throw new \RuntimeException('Gagal menyimpan thumbnail foto laporan ke penyimpanan.');
         }
 
-        return ReportPhoto::create([
-            'report_id' => $report->id,
-            'uploaded_by_user_id' => $uploadedByUserId,
-            'photo_type' => $type,
-            'cycle' => $cycle,
-            'sequence' => $sequence,
-            'file_path' => $filePath,
-            'thumbnail_path' => $thumbPath,
-            'exif_latitude' => $exifLat,
-            'exif_longitude' => $exifLng,
-            'exif_taken_at' => $exifTakenAt,
-            'distance_from_report_m' => $distanceM,
-            'has_geotag_warning' => $hasWarning,
-            'created_at' => $now,
-        ]);
+        try {
+            return ReportPhoto::create([
+                'report_id' => $report->id,
+                'uploaded_by_user_id' => $uploadedByUserId,
+                'photo_type' => $type,
+                'cycle' => $cycle,
+                'sequence' => $sequence,
+                'file_path' => $filePath,
+                'thumbnail_path' => $thumbPath,
+                'exif_latitude' => $exifLat,
+                'exif_longitude' => $exifLng,
+                'exif_taken_at' => $exifTakenAt,
+                'distance_from_report_m' => $distanceM,
+                'has_geotag_warning' => $hasWarning,
+                'created_at' => $now,
+            ]);
+        } catch (Throwable $e) {
+            Storage::disk('public')->delete([$filePath, $thumbPath]);
+
+            throw $e;
+        }
     }
 
     /**

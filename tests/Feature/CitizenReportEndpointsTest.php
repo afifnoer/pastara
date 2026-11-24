@@ -35,6 +35,7 @@ function makeCitizenJpegUpload(string $name = 'evidence.jpg'): UploadedFile
 
 it('detects nearby duplicate PST-DUPL0001 within 135m and enforces WARGA role & Cilacap BBox (TASK-BE-034, AC-016..AC-018)', function (): void {
     $this->seed(CilacapSimulationSeeder::class);
+    Model::preventLazyLoading(true);
 
     $warga = User::where('email', 'warga.demo@pastara.id')->firstOrFail();
     $admin = User::where('email', 'admin.dpupr@pastara.id')->firstOrFail();
@@ -85,6 +86,7 @@ it('detects nearby duplicate PST-DUPL0001 within 135m and enforces WARGA role & 
 it('creates standard, village-routed, and secret reports with PII sanitization and validation guards (TASK-BE-035, TC-F-03, TC-F-04, TC-F-08)', function (): void {
     Storage::fake('public');
     $this->seed(CilacapSimulationSeeder::class);
+    Model::preventLazyLoading(true);
 
     $warga = User::where('email', 'warga.demo@pastara.id')->firstOrFail();
     $cat01 = Category::where('code', 'CAT-01')->firstOrFail();
@@ -261,10 +263,11 @@ it('supports atomic +1 upvote, duplicate 409, self/secret/final 403, watch toggl
     expect($escrow->auditLogs()->where('action_type', AuditActionType::UPVOTED)->where('actor_user_id', $supporter->id)->exists())
         ->toBeTrue();
 
-    // 4. Duplicate upvote rejected with 409 Conflict (TC-F-06)
+    // 4. Duplicate upvote rejected with 409 ALREADY_UPVOTED (TC-F-06, M-01)
     $this->actingAs($supporter, 'sanctum')
         ->postJson("/api/v1/reports/{$escrow->id}/upvote")
-        ->assertStatus(409);
+        ->assertStatus(409)
+        ->assertJsonPath('error.code', 'ALREADY_UPVOTED');
 
     // 5. GET /citizen/reports?tab=watching shows PST-ESCROW01 with masked reporter (NO email/phone PII leak)
     $watchingResponse = $this->actingAs($supporter, 'sanctum')
