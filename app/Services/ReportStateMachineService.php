@@ -1034,8 +1034,11 @@ class ReportStateMachineService
 
     private function assertCitizenSignOffAuthorized(Report $report, ?User $actor, ?string $secretToken): bool
     {
-        if ($actor !== null && $actor->is_active && $actor->role === UserRole::WARGA && (int) $actor->id === (int) $report->reporter_id) {
-            return true;
+        if ($actor !== null) {
+            $freshActor = User::query()->whereKey($actor->id)->first();
+            if ($freshActor !== null && $freshActor->is_active && $freshActor->role === UserRole::WARGA && (int) $freshActor->id === (int) $report->reporter_id) {
+                return true;
+            }
         }
 
         if ($report->is_secret && $report->verifySecretToken($secretToken)) {
