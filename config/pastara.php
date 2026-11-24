@@ -5,6 +5,7 @@ declare(strict_types=1);
 return [
 
     'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
+    'api_docs_enabled' => filter_var(env('API_DOCS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
 
     'cilacap' => [
         'center_lat' => (float) env('CILACAP_CENTER_LAT', -7.7188),

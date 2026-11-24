@@ -1,0 +1,1690 @@
+openapi: 3.0.3
+info:
+  title: PASTARA REST API (pastara-api)
+  version: 1.0.0
+  description: |
+    Spesifikasi OpenAPI 3.0 (Swagger) untuk Backend REST API **PASTARA** (*Platform Pengaduan Layanan Publik Dua Arah & Escrow Verifikasi Warga*) Kabupaten Cilacap.
+
+    ### Konvensi Standar Amplop JSON
+    - **Respons Sukses:** `{ "success": true, "server_time": "2026-11-22T02:00:00Z", "data": ..., "meta"?: ... }`
+    - **Respons Galat:** `{ "success": false, "server_time": "2026-11-22T02:00:00Z", "error": { "code": "...", "message": "...", "fields"?: ... } }`
+    - **Autentikasi:** Stateless Bearer Token (Laravel Sanctum, masa berlaku 24 jam).
+    - **Zona Waktu:** Seluruh timestamp disimpan & dikirim dalam format ISO-8601 UTC (`Z`).
+
+servers:
+  - url: https://staging.afiefnoer.my.id/api/v1
+    description: Server Staging (branch develop)
+  - url: https://afiefnoer.my.id/api/v1
+    description: Server Production (branch main)
+  - url: http://localhost:8000/api/v1
+    description: Server Pengembangan Lokal
+
+tags:
+  - name: System
+    description: Pemeriksaan kesehatan layanan API
+  - name: M01 - Autentikasi & Profil
+    description: Registrasi warga, login Sanctum, profil, dan kata sandi (Endpoint #1–#6)
+  - name: M02 - Portal Transparansi Publik
+    description: Data referensi, peta masalah, jelajah laporan publik, lacak tiket, dan rapor kepatuhan OPD (Endpoint #7–#12)
+  - name: M03 - Pelaporan Warga
+    description: Deteksi duplikat Haversine, buat laporan geospasial, +1 dukung, pantau, dan daftar laporan warga (Endpoint #13–#17)
+  - name: M06 - Escrow Sign-Off & Rating
+    description: Verifikasi warga Setuju/Tolak (Veto) dalam jendela 72 jam & micro-rating kualitas fisik (Endpoint #18–#20)
+  - name: M04 - Disposisi Admin Unit
+    description: Kotak masuk unit, persetujuan Jalur 1, penjadwalan APBD Jalur 2, milestone, tolak, dan reroute (Endpoint #21–#30)
+  - name: M05 - Tugas Lapangan Petugas
+    description: Daftar tugas petugas, catatan progres, dan unggah bukti foto After ber-EXIF (Endpoint #31–#33)
+  - name: M08 - Pengawasan Inspektorat
+    description: Monitoring lintas OPD, sidang sengketa warga, dan rapor internal (Endpoint #34–#36)
+  - name: M10 - Notifikasi In-App
+    description: Daftar notifikasi dan tandai sudah dibaca (Endpoint #37–#38)
+  - name: M11 - Super Admin & Audit Log
+    description: Manajemen pengguna internal, unit kerja, kategori, wilayah, dan audit log baca-saja (Endpoint #39–#43)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: SanctumToken
+      description: Personal Access Token dari `POST /auth/login` atau `POST /auth/register`
+
+  schemas:
+    UserRole:
+      type: string
+      enum: [WARGA, ADMIN_UNIT, PETUGAS, INSPEKTORAT, SUPER_ADMIN]
+    UnitLevel:
+      type: string
+      enum: [OPD, DESA, KELURAHAN, INSPEKTORAT]
+    IssueType:
+      type: string
+      enum: [POINT, LINEAR]
+    ResolutionTrack:
+      type: string
+      enum: [OPERATIONAL, APBD]
+    ReportStatus:
+      type: string
+      enum:
+        - SUBMITTED
+        - ROUTED_TO_UNIT
+        - REJECTED
+        - BUDGET_SCHEDULED
+        - IN_PROGRESS
+        - PENDING_CITIZEN_SIGN_OFF
+        - DISPUTED
+        - REOPENED_BY_AUDIT
+        - VERIFIED_CLOSED
+        - AUTO_VERIFIED_CLOSED
+        - CLOSED_BY_AUDIT
+    SlaZone:
+      type: string
+      enum: [GREEN, YELLOW, RED, PAUSED, APBD_SCHEDULED, STOPPED]
+    RejectionReasonCode:
+      type: string
+      enum: [HOAX, OUT_OF_JURISDICTION, INCOMPLETE, OTHER]
+    DisputeDecision:
+      type: string
+      enum: [REOPENED, CLOSED]
+
+    PaginationMeta:
+      type: object
+      properties:
+        current_page:
+          type: integer
+          example: 1
+        last_page:
+          type: integer
+          example: 3
+        per_page:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 52
+
+    SuccessEnvelope:
+      type: object
+      required: [success, server_time, data]
+      properties:
+        success:
+          type: boolean
+          example: true
+        server_time:
+          type: string
+          format: date-time
+          example: "2026-11-22T02:00:00Z"
+        data:
+          nullable: true
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    ErrorEnvelope:
+      type: object
+      required: [success, server_time, error]
+      properties:
+        success:
+          type: boolean
+          example: false
+        server_time:
+          type: string
+          format: date-time
+          example: "2026-11-22T02:00:00Z"
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+            message:
+              type: string
+              example: Data yang dikirim belum lengkap atau tidak valid.
+            fields:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  type: string
+
+    UserSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Warga Pelapor Uji
+        email:
+          type: string
+          format: email
+          example: warga.demo@pastara.id
+        phone:
+          type: string
+          nullable: true
+          example: "081200000001"
+        role:
+          $ref: '#/components/schemas/UserRole'
+        opd_unit_id:
+          type: integer
+          nullable: true
+        is_active:
+          type: boolean
+          example: true
+
+    ReportDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 103
+        ticket_code:
+          type: string
+          example: PST-ESCROW01
+        title:
+          type: string
+          example: Lampu PJU Padam di Jl. Gatot Subroto, Cilacap Tengah
+        description_sanitized:
+          type: string
+        status:
+          $ref: '#/components/schemas/ReportStatus'
+        status_label:
+          type: string
+          example: Menunggu Konfirmasi Warga
+        resolution_track:
+          $ref: '#/components/schemas/ResolutionTrack'
+          nullable: true
+        current_cycle:
+          type: integer
+          example: 1
+        is_secret:
+          type: boolean
+          example: false
+        upvote_count:
+          type: integer
+          example: 8
+        sla:
+          type: object
+          properties:
+            sla_hours_snapshot:
+              type: integer
+              example: 24
+            sla_deadline_at:
+              type: string
+              format: date-time
+              nullable: true
+            sla_zone:
+              $ref: '#/components/schemas/SlaZone'
+            sla_remaining_seconds:
+              type: integer
+              nullable: true
+            is_sla_overdue:
+              type: boolean
+            is_milestone_overdue:
+              type: boolean
+            is_late:
+              type: boolean
+
+  responses:
+    Unauthorized:
+      description: Sesi tidak valid atau kedaluwarsa (HTTP 401)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            server_time: "2026-11-22T02:00:00Z"
+            error:
+              code: UNAUTHENTICATED
+              message: Sesi Anda telah berakhir. Silakan masuk kembali.
+    Forbidden:
+      description: Tidak memiliki hak akses atau melanggar aturan Escrow (HTTP 403)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Data tidak ditemukan atau diisolasi oleh Policy (HTTP 404)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ConflictTransition:
+      description: Transisi status tidak diizinkan atau konflik data (HTTP 409)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ValidationError:
+      description: Data masukan tidak valid (HTTP 422)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    TooManyRequests:
+      description: Batas rate limiter terlampaui (HTTP 429)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+paths:
+  /health:
+    get:
+      tags: [System]
+      summary: Cek status kesehatan API
+      responses:
+        '200':
+          description: Layanan aktif
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+
+  /auth/register:
+    post:
+      tags: [M01 - Autentikasi & Profil]
+      summary: "#1 Registrasi akun warga baru (role dikunci WARGA)"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password, password_confirmation]
+              properties:
+                name:
+                  type: string
+                  minLength: 3
+                  maxLength: 100
+                email:
+                  type: string
+                  format: email
+                  maxLength: 150
+                phone:
+                  type: string
+                  nullable: true
+                  example: "081234567890"
+                password:
+                  type: string
+                  minLength: 8
+                  maxLength: 72
+                password_confirmation:
+                  type: string
+      responses:
+        '201':
+          description: Akun warga berhasil dibuat & token Sanctum diterbitkan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /auth/login:
+    post:
+      tags: [M01 - Autentikasi & Profil]
+      summary: "#2 Login semua role (rate limit 5/menit per email+IP)"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: warga.demo@pastara.id
+                password:
+                  type: string
+                  example: Pastara2027!
+      responses:
+        '200':
+          description: Login berhasil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/logout:
+    post:
+      tags: [M01 - Autentikasi & Profil]
+      summary: "#3 Logout & cabut token Sanctum aktif"
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Token berhasil dicabut
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/me:
+    get:
+      tags: [M01 - Autentikasi & Profil]
+      summary: "#4 Profil pengguna login & jumlah notifikasi belum dibaca"
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Data pengguna aktif
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/profile:
+    patch:
+      tags: [M01 - Autentikasi & Profil]
+      summary: "#5 Perbarui nama & nomor HP pengguna"
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 3
+                  maxLength: 100
+                phone:
+                  type: string
+                  nullable: true
+      responses:
+        '200':
+          description: Profil diperbarui
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /auth/password:
+    put:
+      tags: [M01 - Autentikasi & Profil]
+      summary: "#6 Ubah password & cabut token perangkat lain"
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, password, password_confirmation]
+              properties:
+                current_password:
+                  type: string
+                password:
+                  type: string
+                  minLength: 8
+                  maxLength: 72
+                password_confirmation:
+                  type: string
+      responses:
+        '200':
+          description: Password berhasil diubah
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /public/reference-data:
+    get:
+      tags: [M02 - Portal Transparansi Publik]
+      summary: "#7 Daftar kategori, unit kerja, kecamatan, & desa aktif Cilacap"
+      responses:
+        '200':
+          description: Data referensi publik
+
+  /public/map-markers:
+    get:
+      tags: [M02 - Portal Transparansi Publik]
+      summary: "#8 Marker peta masalah publik (selalu is_secret = false)"
+      parameters:
+        - in: query
+          name: category_id
+          schema:
+            type: integer
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/ReportStatus'
+        - in: query
+          name: opd_unit_id
+          schema:
+            type: integer
+        - in: query
+          name: district_id
+          schema:
+            type: integer
+        - in: query
+          name: bbox
+          schema:
+            type: string
+            example: "-7.85,108.50,-7.15,109.45"
+      responses:
+        '200':
+          description: Daftar koordinat marker laporan non-rahasia
+
+  /public/reports:
+    get:
+      tags: [M02 - Portal Transparansi Publik]
+      summary: "#9 Jelajah daftar laporan publik berpaginasi (20/halaman)"
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+            maxLength: 100
+        - in: query
+          name: category_id
+          schema:
+            type: integer
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/ReportStatus'
+        - in: query
+          name: opd_unit_id
+          schema:
+            type: integer
+        - in: query
+          name: district_id
+          schema:
+            type: integer
+        - in: query
+          name: overdue_only
+          schema:
+            type: boolean
+        - in: query
+          name: sort
+          schema:
+            type: string
+            enum: [latest, upvotes, sla]
+        - in: query
+          name: page
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Daftar ringkas laporan publik (`PublicReportCardResource`)
+
+  /public/reports/{ticket_code}:
+    get:
+      tags: [M02 - Portal Transparansi Publik]
+      summary: "#10 Detail tiket publik (mengembalikan 404 jika is_secret = true)"
+      parameters:
+        - in: path
+          name: ticket_code
+          required: true
+          schema:
+            type: string
+            example: PST-ESCROW01
+      responses:
+        '200':
+          description: Detail tiket (`PublicReportResource`)
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /public/track:
+    post:
+      tags: [M02 - Portal Transparansi Publik]
+      summary: "#11 Lacak tiket biasa maupun Mode Rahasia Ber-Token (10/menit per IP)"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ticket_code]
+              properties:
+                ticket_code:
+                  type: string
+                  example: PST-PURW2027
+                secret_token:
+                  type: string
+                  nullable: true
+                  example: TKN-DEMO-2027
+      responses:
+        '200':
+          description: "Detail tiket atau prompt { requires_secret_token: true }"
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /public/scorecard:
+    get:
+      tags: [M02 - Portal Transparansi Publik]
+      summary: "#12 Rapor kepatuhan OPD & statistik jujur (memisahkan Terjadwal APBD)"
+      parameters:
+        - in: query
+          name: month
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 12
+        - in: query
+          name: year
+          schema:
+            type: integer
+            minimum: 2025
+            maximum: 2030
+      responses:
+        '200':
+          description: Summary global dan tabel rapor OPD
+
+  /reports/nearby:
+    get:
+      tags: [M03 - Pelaporan Warga]
+      summary: "#13 Deteksi duplikat Haversine radius dinamis (200m/750m, maks 5 tiket)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: category_id
+          required: true
+          schema:
+            type: integer
+        - in: query
+          name: latitude
+          required: true
+          schema:
+            type: number
+            minimum: -7.85
+            maximum: -7.15
+            example: -7.6350
+        - in: query
+          name: longitude
+          required: true
+          schema:
+            type: number
+            minimum: 108.5
+            maximum: 109.45
+            example: 109.0180
+      responses:
+        '200':
+          description: Daftar tiket serupa terdekat (`{ radius_m, matches }`)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /reports:
+    post:
+      tags: [M03 - Pelaporan Warga]
+      summary: "#14 Kirim laporan pengaduan geospasial baru (10/jam per user)"
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [category_id, district_id, village_id, latitude, longitude, title, description, is_secret, photos]
+              properties:
+                category_id:
+                  type: integer
+                district_id:
+                  type: integer
+                village_id:
+                  type: integer
+                latitude:
+                  type: number
+                  minimum: -7.85
+                  maximum: -7.15
+                longitude:
+                  type: number
+                  minimum: 108.5
+                  maximum: 109.45
+                address_detail:
+                  type: string
+                  maxLength: 255
+                title:
+                  type: string
+                  minLength: 10
+                  maxLength: 120
+                description:
+                  type: string
+                  minLength: 20
+                  maxLength: 2000
+                is_secret:
+                  type: boolean
+                photos:
+                  type: array
+                  minItems: 1
+                  maxItems: 3
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        '201':
+          description: Laporan dibuat & dirutekan (`TR-01`), mengembalikan `secret_token` sekali tampil jika rahasia
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /reports/{id}/upvote:
+    post:
+      tags: [M03 - Pelaporan Warga]
+      summary: "#15 Beri dukungan +1 Upvote & pantau otomatis tiket warga lain"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Dukungan berhasil ditambahkan
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/ConflictTransition'
+
+  /reports/{id}/watch:
+    patch:
+      tags: [M03 - Pelaporan Warga]
+      summary: "#16 Ubah status langganan notifikasi tiket yang didukung"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [is_watching]
+              properties:
+                is_watching:
+                  type: boolean
+      responses:
+        '200':
+          description: Status pantau diperbarui
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /citizen/reports:
+    get:
+      tags: [M03 - Pelaporan Warga]
+      summary: "#17 Daftar laporan milik warga atau yang sedang dipantau"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: tab
+          schema:
+            type: string
+            enum: [mine, watching]
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/ReportStatus'
+        - in: query
+          name: page
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Daftar laporan (`CitizenReportResource`)
+
+  /reports/{ticket_code}/sign-off/approve:
+    post:
+      tags: [M06 - Escrow Sign-Off & Rating]
+      summary: "#18 Citizen Sign-Off Setuju Selesai (TR-08 -> VERIFIED_CLOSED)"
+      security:
+        - {}
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: ticket_code
+          required: true
+          schema:
+            type: string
+            example: PST-ESCROW01
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                secret_token:
+                  type: string
+                  nullable: true
+      responses:
+        '200':
+          description: Tiket resmi ditutup terverifikasi warga
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/ConflictTransition'
+
+  /reports/{ticket_code}/sign-off/reject:
+    post:
+      tags: [M06 - Escrow Sign-Off & Rating]
+      summary: "#19 Citizen Sign-Off Tolak / Veto Klaim Selesai (TR-09 -> DISPUTED)"
+      security:
+        - {}
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: ticket_code
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [reason, photos]
+              properties:
+                reason:
+                  type: string
+                  minLength: 20
+                  maxLength: 1000
+                secret_token:
+                  type: string
+                  nullable: true
+                photos:
+                  type: array
+                  minItems: 1
+                  maxItems: 3
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        '200':
+          description: Veto tercatat & sengketa dibuka untuk Inspektorat
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/ConflictTransition'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /reports/{ticket_code}/rating:
+    post:
+      tags: [M06 - Escrow Sign-Off & Rating]
+      summary: "#20 Micro-Rating kecepatan & kualitas fisik (khusus VERIFIED_CLOSED, maks 1x)"
+      security:
+        - {}
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: ticket_code
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [speed_score, physical_quality_score]
+              properties:
+                speed_score:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                physical_quality_score:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                comment:
+                  type: string
+                  maxLength: 500
+                  nullable: true
+                secret_token:
+                  type: string
+                  nullable: true
+      responses:
+        '201':
+          description: Rating disimpan & Indeks Mutu Fisik diperbarui
+        '409':
+          $ref: '#/components/responses/ConflictTransition'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /unit/reports:
+    get:
+      tags: [M04 - Disposisi Admin Unit]
+      summary: "#21 Kotak masuk tiket khusus unit kerja Admin Unit"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: tab
+          schema:
+            type: string
+            enum: [verification, in_progress, apbd, sign_off, disputed, closed, rejected]
+        - in: query
+          name: category_id
+          schema:
+            type: integer
+        - in: query
+          name: overdue_only
+          schema:
+            type: boolean
+        - in: query
+          name: page
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Daftar tiket milik unit (`UnitReportResource`)
+
+  /unit/reports/{id}:
+    get:
+      tags: [M04 - Disposisi Admin Unit]
+      summary: "#22 Detail tiket unit (404 jika beda unit; identitas rahasia disensor)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Detail tiket unit
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /unit/officers:
+    get:
+      tags: [M04 - Disposisi Admin Unit]
+      summary: "#23 Daftar petugas aktif di unit Admin beserta beban tugas aktif"
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Daftar petugas unit
+
+  /unit/reports/{id}/assign:
+    post:
+      tags: [M04 - Disposisi Admin Unit]
+      summary: "#24 Setujui & tugaskan Jalur 1 Operasional (TR-04 -> IN_PROGRESS)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [officer_id]
+              properties:
+                officer_id:
+                  type: integer
+                note:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: Petugas ditugaskan & SLA dimulai
+        '409':
+          $ref: '#/components/responses/ConflictTransition'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /unit/reports/{id}/schedule-apbd:
+    post:
+      tags: [M04 - Disposisi Admin Unit]
+      summary: "#25 Jadwalkan ke Jalur 2 Anggaran APBD (TR-05 -> BUDGET_SCHEDULED)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [fiscal_year, proposal_ref_number, target_quarter, note]
+              properties:
+                fiscal_year:
+                  type: integer
+                  example: 2027
+                proposal_ref_number:
+                  type: string
+                  example: RKA-DPUPR-2027-014
+                target_quarter:
+                  type: string
+                  enum: [Q1, Q2, Q3, Q4]
+                estimated_budget:
+                  type: number
+                note:
+                  type: string
+                  minLength: 20
+                  maxLength: 1000
+                document_proof:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Tiket dijadwalkan ke Jalur 2 APBD
+        '409':
+          $ref: '#/components/responses/ConflictTransition'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /unit/reports/{id}/apbd-milestones:
+    post:
+      tags: [M04 - Disposisi Admin Unit]
+      summary: "#26 Perbarui milestone triwulanan / unggah dokumen bukti RKA APBD"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [quarter_label, progress_note]
+              properties:
+                quarter_label:
+                  type: string
+                  example: 2027-Q1
+                progress_note:
+                  type: string
+                  minLength: 20
+                  maxLength: 1000
+                document_proof:
+                  type: string
+                  format: binary
+                attachment:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Milestone APBD disimpan
+
+  /unit/reports/{id}/start-execution:
+    post:
+      tags: [M04 - Disposisi Admin Unit]
+      summary: "#27 Mulai eksekusi lapangan dari tiket APBD (TR-06 -> IN_PROGRESS)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [execution_target_date, officer_id]
+              properties:
+                execution_target_date:
+                  type: string
+                  format: date
+                  example: "2027-05-30"
+                officer_id:
+                  type: integer
+                note:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: Eksekusi APBD dimulai & SLA berjalan hingga target date
+
+  /unit/reports/{id}/reject:
+    post:
+      tags: [M04 - Disposisi Admin Unit]
+      summary: "#28 Tolak laporan pada tahap verifikasi awal (TR-03 -> REJECTED)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason_code, note]
+              properties:
+                reason_code:
+                  $ref: '#/components/schemas/RejectionReasonCode'
+                note:
+                  type: string
+                  minLength: 20
+                  maxLength: 1000
+      responses:
+        '200':
+          description: Laporan ditolak
+
+  /unit/reports/{id}/reroute:
+    post:
+      tags: [M04 - Disposisi Admin Unit]
+      summary: "#29 Alihkan (reroute) tiket ke unit kerja lain (TR-02)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_opd_unit_id, note]
+              properties:
+                target_opd_unit_id:
+                  type: integer
+                new_category_id:
+                  type: integer
+                  nullable: true
+                note:
+                  type: string
+                  minLength: 20
+                  maxLength: 500
+      responses:
+        '200':
+          description: Tiket dialihkan ke unit tujuan
+
+  /unit/reports/{id}/reassign-officer:
+    patch:
+      tags: [M04 - Disposisi Admin Unit]
+      summary: "#30 Ganti petugas lapangan tanpa mengubah tenggat SLA"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [officer_id, reason]
+              properties:
+                officer_id:
+                  type: integer
+                reason:
+                  type: string
+                  minLength: 10
+                  maxLength: 500
+      responses:
+        '200':
+          description: Petugas lapangan diperbarui
+
+  /officer/tasks:
+    get:
+      tags: [M05 - Tugas Lapangan Petugas]
+      summary: "#31 Daftar tugas milik petugas login terurut tenggat SLA terdekat"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [active, history]
+        - in: query
+          name: page
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Daftar tugas petugas
+
+  /officer/tasks/{id}/progress:
+    post:
+      tags: [M05 - Tugas Lapangan Petugas]
+      summary: "#32 Tambah catatan & foto progres lapangan (tidak menjeda SLA)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [note]
+              properties:
+                note:
+                  type: string
+                  minLength: 10
+                  maxLength: 1000
+                photos:
+                  type: array
+                  maxItems: 3
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        '201':
+          description: Catatan progres disimpan
+
+  /officer/tasks/{id}/evidence:
+    post:
+      tags: [M05 - Tugas Lapangan Petugas]
+      summary: "#33 Unggah foto bukti After ber-EXIF & kunci ke Escrow (TR-07/TR-13 -> PENDING_CITIZEN_SIGN_OFF)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [action_note, photos]
+              properties:
+                action_note:
+                  type: string
+                  minLength: 20
+                  maxLength: 1000
+                photos:
+                  type: array
+                  minItems: 1
+                  maxItems: 3
+                  items:
+                    type: string
+                    format: binary
+                device_latitude:
+                  type: number
+                  nullable: true
+                device_longitude:
+                  type: number
+                  nullable: true
+      responses:
+        '200':
+          description: Bukti perbaikan diterima, EXIF dihapus dari publik, SLA dijeda, & jendela sign-off 72 jam dimulai
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/ConflictTransition'
+
+  /inspectorate/reports:
+    get:
+      tags: [M08 - Pengawasan Inspektorat]
+      summary: "#34 Dashboard pengawasan lintas OPD (AuditReportResource)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: tab
+          schema:
+            type: string
+            enum: [sla_overdue, milestone_overdue, disputed, all]
+        - in: query
+          name: opd_unit_id
+          schema:
+            type: integer
+        - in: query
+          name: category_id
+          schema:
+            type: integer
+        - in: query
+          name: page
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Daftar tiket pengawasan Inspektorat
+
+  /inspectorate/disputes/{id}/resolve:
+    post:
+      tags: [M08 - Pengawasan Inspektorat]
+      summary: "#35 Putusan sidang sengketa warga (TR-11 REOPENED atau TR-12 CLOSED)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, audit_notes]
+              properties:
+                decision:
+                  $ref: '#/components/schemas/DisputeDecision'
+                audit_notes:
+                  type: string
+                  minLength: 20
+                  maxLength: 2000
+                reopen_sla_hours:
+                  type: integer
+                  enum: [24, 48, 72]
+                  nullable: true
+      responses:
+        '200':
+          description: Putusan audit ditetapkan
+
+  /inspectorate/scorecard:
+    get:
+      tags: [M08 - Pengawasan Inspektorat]
+      summary: "#36 Rapor kepatuhan internal lintas OPD untuk Inspektorat"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: month
+          schema:
+            type: integer
+        - in: query
+          name: year
+          schema:
+            type: integer
+        - in: query
+          name: sort
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Rapor internal lintas OPD
+
+  /notifications:
+    get:
+      tags: [M10 - Notifikasi In-App]
+      summary: "#37 Daftar notifikasi milik pengguna login + unread_count"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: unread_only
+          schema:
+            type: boolean
+        - in: query
+          name: page
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Daftar notifikasi pengguna
+
+  /notifications/read-all:
+    post:
+      tags: [M10 - Notifikasi In-App]
+      summary: "#38 Tandai satu atau seluruh notifikasi sebagai sudah dibaca"
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notification_ids:
+                  type: array
+                  nullable: true
+                  items:
+                    type: integer
+      responses:
+        '200':
+          description: Notifikasi ditandai sudah dibaca
+
+  /admin/users:
+    get:
+      tags: [M11 - Super Admin & Audit Log]
+      summary: "#39a Daftar akun pengguna internal"
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Daftar pengguna
+    post:
+      tags: [M11 - Super Admin & Audit Log]
+      summary: "#39b Buat akun internal (ADMIN_UNIT, PETUGAS, INSPEKTORAT)"
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password, role]
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                role:
+                  type: string
+                  enum: [ADMIN_UNIT, PETUGAS, INSPEKTORAT]
+                opd_unit_id:
+                  type: integer
+                  nullable: true
+      responses:
+        '201':
+          description: Akun internal dibuat
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /admin/users/{id}:
+    patch:
+      tags: [M11 - Super Admin & Audit Log]
+      summary: "#39c Perbarui / nonaktifkan akun internal (409 jika petugas masih punya tugas aktif)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                opd_unit_id:
+                  type: integer
+                  nullable: true
+                is_active:
+                  type: boolean
+      responses:
+        '200':
+          description: Pengguna diperbarui
+        '409':
+          $ref: '#/components/responses/ConflictTransition'
+
+  /admin/opd-units:
+    get:
+      tags: [M11 - Super Admin & Audit Log]
+      summary: "#40a Daftar unit kerja / OPD / Desa"
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Daftar unit kerja
+    post:
+      tags: [M11 - Super Admin & Audit Log]
+      summary: "#40b Tambah unit kerja baru"
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name, level]
+              properties:
+                code:
+                  type: string
+                name:
+                  type: string
+                level:
+                  $ref: '#/components/schemas/UnitLevel'
+                description:
+                  type: string
+      responses:
+        '201':
+          description: Unit kerja ditambahkan
+
+  /admin/opd-units/{id}:
+    patch:
+      tags: [M11 - Super Admin & Audit Log]
+      summary: "#40c Perbarui / nonaktifkan unit kerja (409 jika masih punya tiket aktif)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                is_active:
+                  type: boolean
+      responses:
+        '200':
+          description: Unit kerja diperbarui
+        '409':
+          $ref: '#/components/responses/ConflictTransition'
+
+  /admin/categories:
+    get:
+      tags: [M11 - Super Admin & Audit Log]
+      summary: "#41a Daftar kategori masalah"
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Daftar kategori
+
+  /admin/categories/{id}:
+    patch:
+      tags: [M11 - Super Admin & Audit Log]
+      summary: "#41b Ubah parameter SLA/radius/geotag kategori (hanya berlaku untuk tiket baru)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                default_opd_unit_id:
+                  type: integer
+                  nullable: true
+                default_sla_hours:
+                  type: integer
+                  enum: [24, 48, 72]
+                issue_type:
+                  $ref: '#/components/schemas/IssueType'
+                duplicate_radius_m:
+                  type: integer
+                  minimum: 50
+                  maximum: 999
+                geotag_tolerance_m:
+                  type: integer
+                  minimum: 25
+                  maximum: 1000
+                recommend_secret:
+                  type: boolean
+      responses:
+        '200':
+          description: Parameter kategori diperbarui
+
+  /admin/locations:
+    get:
+      tags: [M11 - Super Admin & Audit Log]
+      summary: "#42a Daftar kecamatan & desa/kelurahan Kabupaten Cilacap"
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Daftar wilayah
+    post:
+      tags: [M11 - Super Admin & Audit Log]
+      summary: "#42b Tambah kecamatan atau desa/kelurahan baru"
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, name]
+              properties:
+                type:
+                  type: string
+                  enum: [district, village]
+                code:
+                  type: string
+                district_id:
+                  type: integer
+                opd_unit_id:
+                  type: integer
+                  nullable: true
+                name:
+                  type: string
+                village_type:
+                  type: string
+                  enum: [DESA, KELURAHAN]
+      responses:
+        '201':
+          description: Wilayah ditambahkan
+
+  /admin/locations/{type}/{id}:
+    patch:
+      tags: [M11 - Super Admin & Audit Log]
+      summary: "#42c Perbarui data kecamatan atau desa/kelurahan"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: type
+          required: true
+          schema:
+            type: string
+            enum: [district, village]
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                opd_unit_id:
+                  type: integer
+                  nullable: true
+      responses:
+        '200':
+          description: Data wilayah diperbarui
+
+  /admin/audit-logs:
+    get:
+      tags: [M11 - Super Admin & Audit Log]
+      summary: "#43 Penampil jejak audit sistem baca-saja (SUPER_ADMIN & INSPEKTORAT)"
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: report_id
+          schema:
+            type: integer
+        - in: query
+          name: actor_role
+          schema:
+            type: string
+        - in: query
+          name: action_type
+          schema:
+            type: string
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: page
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Daftar audit log baca-saja berpaginasi
