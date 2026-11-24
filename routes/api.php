@@ -4,18 +4,14 @@ declare(strict_types=1);
 
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CitizenReportController;
+use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\OfficerTaskController;
 use App\Http\Controllers\Api\V1\PublicPortalController;
 use App\Http\Controllers\Api\V1\UnitReportController;
-use App\Support\ApiResponse;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function (): void {
-    Route::get('/health', fn (): JsonResponse => ApiResponse::success([
-        'status' => 'ok',
-        'app' => config('app.name'),
-    ]));
+    Route::get('/health', HealthController::class);
 
     // M01 — Autentikasi & Profil
     Route::prefix('auth')->group(function (): void {
