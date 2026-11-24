@@ -2,6 +2,11 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\Api\V1\Admin\AuditLogAdminController;
+use App\Http\Controllers\Api\V1\Admin\CategoryAdminController;
+use App\Http\Controllers\Api\V1\Admin\LocationAdminController;
+use App\Http\Controllers\Api\V1\Admin\OpdUnitAdminController;
+use App\Http\Controllers\Api\V1\Admin\UserAdminController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CitizenReportController;
 use App\Http\Controllers\Api\V1\CitizenSignOffController;
@@ -101,5 +106,29 @@ Route::prefix('v1')->group(function (): void {
     Route::prefix('notifications')->middleware(['auth:sanctum', 'role', 'throttle:api'])->group(function (): void {
         Route::get('/', [NotificationController::class, 'index']);
         Route::post('/read-all', [NotificationController::class, 'markAsRead']);
+    });
+
+    // M11 — Manajemen Super Admin & Audit Log Sistem
+    Route::prefix('admin')->middleware(['auth:sanctum', 'role:SUPER_ADMIN', 'throttle:api'])->group(function (): void {
+        Route::get('/users', [UserAdminController::class, 'index']);
+        Route::post('/users', [UserAdminController::class, 'store']);
+        Route::patch('/users/{user}', [UserAdminController::class, 'update'])->whereNumber('user');
+
+        Route::get('/opd-units', [OpdUnitAdminController::class, 'index']);
+        Route::post('/opd-units', [OpdUnitAdminController::class, 'store']);
+        Route::patch('/opd-units/{opdUnit}', [OpdUnitAdminController::class, 'update'])->whereNumber('opdUnit');
+
+        Route::get('/categories', [CategoryAdminController::class, 'index']);
+        Route::patch('/categories/{category}', [CategoryAdminController::class, 'update'])->whereNumber('category');
+
+        Route::get('/locations', [LocationAdminController::class, 'index']);
+        Route::post('/locations', [LocationAdminController::class, 'store']);
+        Route::patch('/locations/{type}/{id}', [LocationAdminController::class, 'update'])
+            ->whereIn('type', ['district', 'village'])
+            ->whereNumber('id');
+    });
+
+    Route::prefix('admin')->middleware(['auth:sanctum', 'role:SUPER_ADMIN,INSPEKTORAT', 'throttle:api'])->group(function (): void {
+        Route::get('/audit-logs', [AuditLogAdminController::class, 'index']);
     });
 });
