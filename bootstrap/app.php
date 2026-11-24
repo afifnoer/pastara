@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Exceptions\DuplicateUpvoteException;
 use App\Exceptions\EscrowLockViolationException;
 use App\Exceptions\InvalidStateTransitionException;
 use App\Http\Middleware\EnsureRole;
@@ -113,6 +114,14 @@ return Application::configure(basePath: dirname(__DIR__))
             }
 
             return ApiResponse::error('INVALID_STATE_TRANSITION', $message, 409);
+        });
+
+        $exceptions->render(function (DuplicateUpvoteException $e, Request $request) use ($isApiRequest): ?JsonResponse {
+            if (! $isApiRequest($request)) {
+                return null;
+            }
+
+            return ApiResponse::error('ALREADY_UPVOTED', $e->getMessage(), 409);
         });
 
         $exceptions->render(function (ValidationException $e, Request $request) use ($isApiRequest): ?JsonResponse {

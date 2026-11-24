@@ -175,7 +175,10 @@ abstract class BaseReportResource extends JsonResource
             return [];
         }
 
-        $logs = $report->auditLogs->sortBy('created_at');
+        $logs = $report->auditLogs->sortBy([
+            ['created_at', 'asc'],
+            ['id', 'asc'],
+        ]);
         if ($onlyPublicVisible) {
             $logs = $logs->filter(static fn (AuditLog $log): bool => $log->is_public_visible);
         }
@@ -255,7 +258,10 @@ abstract class BaseReportResource extends JsonResource
 
         $schedule = $report->budgetSchedule;
         $milestones = $schedule->relationLoaded('milestones')
-            ? $schedule->milestones->sortByDesc('created_at')->values()->map(static fn (BudgetMilestone $m): array => [
+            ? $schedule->milestones->sortBy([
+                ['created_at', 'desc'],
+                ['id', 'desc'],
+            ])->values()->map(static fn (BudgetMilestone $m): array => [
                 'id' => $m->id,
                 'quarter_label' => $m->quarter_label,
                 'progress_note' => $m->progress_note,

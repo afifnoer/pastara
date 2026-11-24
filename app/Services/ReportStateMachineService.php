@@ -125,9 +125,17 @@ class ReportStateMachineService
                 }
 
                 $targetUnit = $this->resolveTargetUnit($category, $village);
-                $isSecret = (bool) ($payload['is_secret'] ?? false);
+                $rawSecret = $payload['is_secret'] ?? false;
+                $isSecret = is_bool($rawSecret)
+                    ? $rawSecret
+                    : in_array(strtolower(trim((string) $rawSecret)), ['true', '1'], true);
                 $plainToken = $isSecret ? $this->generateSecretToken() : null;
                 $now = CarbonImmutable::now('UTC');
+
+                $rawAddress = isset($payload['address_detail']) ? trim((string) $payload['address_detail']) : '';
+                $sanitizedAddress = $rawAddress !== ''
+                    ? mb_substr($this->sanitizer->sanitize($rawAddress), 0, 255)
+                    : null;
 
                 $report = Report::create([
                     'ticket_code' => $this->generateUniqueTicketCode(),
@@ -140,7 +148,7 @@ class ReportStateMachineService
                     'description_sanitized' => $this->sanitizer->sanitize((string) $payload['description']),
                     'latitude' => $lat,
                     'longitude' => $lng,
-                    'address_detail' => isset($payload['address_detail']) ? $this->sanitizer->sanitize(trim((string) $payload['address_detail'])) : null,
+                    'address_detail' => $sanitizedAddress,
                     'is_secret' => $isSecret,
                     'secret_token_hash' => $plainToken !== null ? Report::hashSecretToken($plainToken) : null,
                     'status' => ReportStatus::ROUTED_TO_UNIT,
@@ -149,8 +157,6 @@ class ReportStateMachineService
                     'duplicate_radius_snapshot_m' => $category->duplicate_radius_m,
                     'geotag_tolerance_snapshot_m' => $category->geotag_tolerance_m,
                     'sla_hours_snapshot' => $category->default_sla_hours,
-                    'created_at' => $now,
-                    'updated_at' => $now,
                 ]);
 
                 foreach (array_values($beforePhotos) as $index => $photoFile) {
@@ -276,6 +282,14 @@ class ReportStateMachineService
                 NotificationType::REPORT_ROUTED,
                 $locked,
                 "Tiket {$locked->ticket_code} dialihkan dari {$fromUnitName} ke {$targetUnit->name}."
+            );
+
+            $this->notifier->notifyUsers(
+                [(int) $locked->reporter_id],
+                NotificationType::REPORT_ROUTED,
+                $locked,
+                "Laporan {$locked->ticket_code} dialihkan dari {$fromUnitName} ke {$targetUnit->name} untuk ditindaklanjuti.",
+                'Laporan Dialihkan ke Unit Lain'
             );
 
             return $locked->fresh();
@@ -475,14 +489,28 @@ class ReportStateMachineService
             $this->assertOfficerEligibleForUnit($freshOfficer, (int) $locked->opd_unit_id);
 
             $now = CarbonImmutable::now('UTC');
-            $parsedTarget = CarbonImmutable::parse($targetDate, 'Asia/Jakarta');
-            $slaDeadline = $parsedTarget->endOfDay()->utc();
-            if ($slaDeadline->lte($now)) {
+            $trimmedTargetDate = trim($targetDate);
+
+            try {
+                $parsedTarget = CarbonImmutable::createFromFormat('!Y-m-d', $trimmedTargetDate, 'Asia/Jakarta');
+            } catch (Throwable) {
+                $parsedTarget = false;
+            }
+
+            if (! $parsedTarget instanceof CarbonImmutable || $parsedTarget->format('Y-m-d') !== $trimmedTargetDate) {
                 throw ValidationException::withMessages([
-                    'execution_target_date' => ['Tanggal target eksekusi APBD harus berada di masa depan.'],
+                    'execution_target_date' => ['Format tanggal target eksekusi harus YYYY-MM-DD.'],
                 ]);
             }
 
+            $todayWib = $now->setTimezone('Asia/Jakarta')->startOfDay();
+            if ($parsedTarget->lte($todayWib)) {
+                throw ValidationException::withMessages([
+                    'execution_target_date' => ['Tanggal target eksekusi APBD harus lebih besar dari hari ini (WIB).'],
+                ]);
+            }
+
+            $slaDeadline = $parsedTarget->endOfDay()->utc();
             $normalizedTargetDate = $parsedTarget->toDateString();
             $schedule = BudgetSchedule::query()->where('report_id', $locked->id)->lockForUpdate()->first();
             if ($schedule === null) {
@@ -956,10 +984,13 @@ class ReportStateMachineService
 
     private function assertUnitAdmin(User $admin, Report $report): void
     {
+        $freshAdmin = User::query()->whereKey($admin->id)->first();
+
         if (
-            $admin->role !== UserRole::ADMIN_UNIT
-            || ! $admin->is_active
-            || (int) $admin->opd_unit_id !== (int) $report->opd_unit_id
+            $freshAdmin === null
+            || $freshAdmin->role !== UserRole::ADMIN_UNIT
+            || ! $freshAdmin->is_active
+            || (int) $freshAdmin->opd_unit_id !== (int) $report->opd_unit_id
         ) {
             throw new AuthorizationException('Anda tidak berwenang mengelola tiket unit kerja ini.');
         }
@@ -967,10 +998,13 @@ class ReportStateMachineService
 
     private function assertAssignedOfficer(User $officer, Report $report): void
     {
+        $freshOfficer = User::query()->whereKey($officer->id)->first();
+
         if (
-            $officer->role !== UserRole::PETUGAS
-            || ! $officer->is_active
-            || (int) $report->assigned_officer_id !== (int) $officer->id
+            $freshOfficer === null
+            || $freshOfficer->role !== UserRole::PETUGAS
+            || ! $freshOfficer->is_active
+            || (int) $report->assigned_officer_id !== (int) $freshOfficer->id
         ) {
             throw new AuthorizationException('Anda tidak ditugaskan pada tiket ini.');
         }
@@ -1027,7 +1061,14 @@ class ReportStateMachineService
                 return $village->opdUnit;
             }
 
-            return OpdUnit::query()->where('code', 'DESA_UMUM')->where('is_active', true)->firstOrFail();
+            $fallbackUnit = OpdUnit::query()->where('code', 'DESA_UMUM')->where('is_active', true)->first();
+            if ($fallbackUnit === null) {
+                throw ValidationException::withMessages([
+                    'village_id' => ['Unit kerja desa umum (DESA_UMUM) sedang tidak aktif.'],
+                ]);
+            }
+
+            return $fallbackUnit;
         }
 
         $unit = OpdUnit::query()->whereKey($category->default_opd_unit_id)->where('is_active', true)->first();
@@ -1067,14 +1108,14 @@ class ReportStateMachineService
         return $segment;
     }
 
-    private function storeApbdDocument(UploadedFile $file): string
+    public function storeApbdDocument(UploadedFile $file, string $field = 'document_proof'): string
     {
         $realPath = $file->getRealPath() ?: $file->getPathname();
         $rawContents = $realPath !== '' ? @file_get_contents($realPath) : false;
 
         if ($rawContents === false || $rawContents === '') {
             throw ValidationException::withMessages([
-                'document_proof' => ['Berkas dokumen bukti usulan APBD tidak dapat dibaca atau kosong.'],
+                $field => ['Berkas dokumen bukti usulan APBD tidak dapat dibaca atau kosong.'],
             ]);
         }
 
@@ -1084,7 +1125,7 @@ class ReportStateMachineService
         if ($detectedMime === 'application/pdf') {
             if (! str_starts_with($rawContents, '%PDF-')) {
                 throw ValidationException::withMessages([
-                    'document_proof' => ['Berkas PDF tidak valid atau rusak.'],
+                    $field => ['Berkas PDF tidak valid atau rusak.'],
                 ]);
             }
 
@@ -1097,10 +1138,18 @@ class ReportStateMachineService
         }
 
         if (in_array($detectedMime, ['image/jpeg', 'image/png'], true)) {
-            $imageManager = new ImageManager(Driver::class);
-            $image = $imageManager->decodePath($realPath);
-            $image->orient();
-            $encoded = (string) $image->encode(new WebpEncoder(quality: 85, strip: true));
+            try {
+                $imageManager = new ImageManager(Driver::class);
+                $image = $imageManager->decodePath($realPath);
+                $image->orient();
+                $image->scaleDown(width: 1920, height: 1920);
+                $encoded = (string) $image->encode(new WebpEncoder(quality: 85, strip: true));
+            } catch (Throwable) {
+                throw ValidationException::withMessages([
+                    $field => ['Berkas gambar dokumen bukti APBD rusak atau tidak dapat diproses.'],
+                ]);
+            }
+
             $path = sprintf('documents/%s/%s/%s.webp', $now->format('Y'), $now->format('m'), Str::uuid());
 
             if (! Storage::disk('public')->put($path, $encoded)) {
@@ -1111,7 +1160,7 @@ class ReportStateMachineService
         }
 
         throw ValidationException::withMessages([
-            'document_proof' => ['Dokumen bukti usulan APBD hanya boleh berupa PDF, JPG, atau PNG yang valid.'],
+            $field => ['Dokumen bukti usulan APBD hanya boleh berupa PDF, JPG, atau PNG yang valid.'],
         ]);
     }
 }

@@ -11,6 +11,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\Encoders\WebpEncoder;
 use Intervention\Image\ImageManager;
@@ -92,9 +93,15 @@ class GeotagValidationService
         $filePath = "{$directory}/{$uuid}.webp";
         $thumbPath = "{$directory}/{$uuid}-thumb.webp";
 
-        $image = $this->imageManager->decodePath($realPath);
-        $image->orient();
-        $image->scaleDown(width: self::MAX_IMAGE_WIDTH, height: self::MAX_IMAGE_WIDTH);
+        try {
+            $image = $this->imageManager->decodePath($realPath);
+            $image->orient();
+            $image->scaleDown(width: self::MAX_IMAGE_WIDTH, height: self::MAX_IMAGE_WIDTH);
+        } catch (Throwable) {
+            throw ValidationException::withMessages([
+                'photos' => ['Berkas foto tidak valid atau format gambar rusak.'],
+            ]);
+        }
 
         $cleanBinary = (string) $image->encode(new WebpEncoder(quality: 85, strip: true));
         if (! Storage::disk('public')->put($filePath, $cleanBinary)) {
@@ -107,21 +114,27 @@ class GeotagValidationService
             throw new \RuntimeException('Gagal menyimpan thumbnail foto laporan ke penyimpanan.');
         }
 
-        return ReportPhoto::create([
-            'report_id' => $report->id,
-            'uploaded_by_user_id' => $uploadedByUserId,
-            'photo_type' => $type,
-            'cycle' => $cycle,
-            'sequence' => $sequence,
-            'file_path' => $filePath,
-            'thumbnail_path' => $thumbPath,
-            'exif_latitude' => $exifLat,
-            'exif_longitude' => $exifLng,
-            'exif_taken_at' => $exifTakenAt,
-            'distance_from_report_m' => $distanceM,
-            'has_geotag_warning' => $hasWarning,
-            'created_at' => $now,
-        ]);
+        try {
+            return ReportPhoto::create([
+                'report_id' => $report->id,
+                'uploaded_by_user_id' => $uploadedByUserId,
+                'photo_type' => $type,
+                'cycle' => $cycle,
+                'sequence' => $sequence,
+                'file_path' => $filePath,
+                'thumbnail_path' => $thumbPath,
+                'exif_latitude' => $exifLat,
+                'exif_longitude' => $exifLng,
+                'exif_taken_at' => $exifTakenAt,
+                'distance_from_report_m' => $distanceM,
+                'has_geotag_warning' => $hasWarning,
+                'created_at' => $now,
+            ]);
+        } catch (Throwable $e) {
+            Storage::disk('public')->delete([$filePath, $thumbPath]);
+
+            throw $e;
+        }
     }
 
     /**
