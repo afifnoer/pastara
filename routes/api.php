@@ -6,6 +6,8 @@ use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CitizenReportController;
 use App\Http\Controllers\Api\V1\CitizenSignOffController;
 use App\Http\Controllers\Api\V1\HealthController;
+use App\Http\Controllers\Api\V1\InspectorateController;
+use App\Http\Controllers\Api\V1\NotificationController;
 use App\Http\Controllers\Api\V1\OfficerTaskController;
 use App\Http\Controllers\Api\V1\PublicPortalController;
 use App\Http\Controllers\Api\V1\UnitReportController;
@@ -86,5 +88,18 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/tasks', [OfficerTaskController::class, 'index']);
         Route::post('/tasks/{report}/progress', [OfficerTaskController::class, 'storeProgress'])->whereNumber('report');
         Route::post('/tasks/{report}/evidence', [OfficerTaskController::class, 'submitEvidence'])->whereNumber('report');
+    });
+
+    // M08 — Pengawasan & Sidang Inspektorat
+    Route::prefix('inspectorate')->middleware(['auth:sanctum', 'role:INSPEKTORAT', 'throttle:api'])->group(function (): void {
+        Route::get('/reports', [InspectorateController::class, 'reports']);
+        Route::post('/disputes/{dispute}/resolve', [InspectorateController::class, 'resolveDispute'])->whereNumber('dispute');
+        Route::get('/scorecard', [InspectorateController::class, 'scorecard']);
+    });
+
+    // M10 — Notifikasi In-App
+    Route::prefix('notifications')->middleware(['auth:sanctum', 'role', 'throttle:api'])->group(function (): void {
+        Route::get('/', [NotificationController::class, 'index']);
+        Route::post('/read-all', [NotificationController::class, 'markAsRead']);
     });
 });

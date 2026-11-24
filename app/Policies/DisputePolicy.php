@@ -14,8 +14,8 @@ class DisputePolicy
 {
     public function resolve(User $user, Dispute $dispute): Response
     {
-        if ($user->role !== UserRole::INSPEKTORAT) {
-            return Response::deny('Hanya auditor Inspektorat yang berhak memutus sengketa.');
+        if (! $user->is_active || $user->role !== UserRole::INSPEKTORAT) {
+            return Response::deny('Hanya auditor Inspektorat aktif yang berhak memutus sengketa.');
         }
 
         return $dispute->status === DisputeStatus::PENDING
