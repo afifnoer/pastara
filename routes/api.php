@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CitizenReportController;
+use App\Http\Controllers\Api\V1\CitizenSignOffController;
 use App\Http\Controllers\Api\V1\OfficerTaskController;
 use App\Http\Controllers\Api\V1\PublicPortalController;
 use App\Http\Controllers\Api\V1\UnitReportController;
@@ -58,6 +59,16 @@ Route::prefix('v1')->group(function (): void {
 
         Route::post('/reports', [CitizenReportController::class, 'store'])
             ->middleware('throttle:create-report');
+    });
+
+    // M06 — Escrow Citizen Sign-Off & Micro-Rating (Opsional auth:sanctum / secret_token)
+    Route::middleware('throttle:api')->group(function (): void {
+        Route::post('/reports/{report:ticket_code}/sign-off/approve', [CitizenSignOffController::class, 'approve'])
+            ->where('report', '[A-Za-z0-9-]+');
+        Route::post('/reports/{report:ticket_code}/sign-off/reject', [CitizenSignOffController::class, 'reject'])
+            ->where('report', '[A-Za-z0-9-]+');
+        Route::post('/reports/{report:ticket_code}/rating', [CitizenSignOffController::class, 'rate'])
+            ->where('report', '[A-Za-z0-9-]+');
     });
 
     // M04 — Verifikasi & Disposisi Admin Unit
