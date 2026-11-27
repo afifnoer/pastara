@@ -85,6 +85,35 @@ components:
     DisputeDecision:
       type: string
       enum: [REOPENED, CLOSED]
+    AuditActionType:
+      type: string
+      enum:
+        - SUBMITTED
+        - ROUTED
+        - REROUTED
+        - REJECTED
+        - ASSIGNED
+        - OFFICER_CHANGED
+        - BUDGET_SCHEDULED
+        - MILESTONE_UPDATED
+        - MILESTONE_OVERDUE
+        - EXECUTION_STARTED
+        - PROGRESS_NOTE
+        - SLA_WARNING
+        - SLA_OVERDUE
+        - EVIDENCE_SUBMITTED
+        - CITIZEN_APPROVED
+        - CITIZEN_REJECTED
+        - AUTO_VERIFIED
+        - AUDIT_REOPENED
+        - AUDIT_CLOSED
+        - RATED
+        - UPVOTED
+        - USER_CREATED
+        - USER_UPDATED
+        - USER_DEACTIVATED
+        - CATEGORY_UPDATED
+        - UNIT_UPDATED
 
     PaginationMeta:
       type: object
@@ -1340,14 +1369,19 @@ paths:
           name: month
           schema:
             type: integer
+            minimum: 1
+            maximum: 12
         - in: query
           name: year
           schema:
             type: integer
+            minimum: 2025
+            maximum: 2035
         - in: query
           name: sort
           schema:
             type: string
+            enum: [compliance_asc, compliance_desc, overdue_desc, dispute_desc, sla_asc, name_asc]
       responses:
         '200':
           description: Rapor internal lintas OPD
@@ -1398,6 +1432,29 @@ paths:
       summary: "#39a Daftar akun pengguna internal"
       security:
         - bearerAuth: []
+      parameters:
+        - in: query
+          name: role
+          schema:
+            $ref: '#/components/schemas/UserRole'
+        - in: query
+          name: opd_unit_id
+          schema:
+            type: integer
+        - in: query
+          name: is_active
+          schema:
+            type: boolean
+        - in: query
+          name: q
+          schema:
+            type: string
+            maxLength: 100
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
       responses:
         '200':
           description: Daftar pengguna
@@ -1416,11 +1473,20 @@ paths:
               properties:
                 name:
                   type: string
+                  minLength: 2
+                  maxLength: 120
                 email:
                   type: string
                   format: email
+                  maxLength: 150
+                phone:
+                  type: string
+                  maxLength: 30
+                  nullable: true
                 password:
                   type: string
+                  minLength: 8
+                  maxLength: 128
                 role:
                   type: string
                   enum: [ADMIN_UNIT, PETUGAS, INSPEKTORAT]
@@ -1453,11 +1519,22 @@ paths:
               properties:
                 name:
                   type: string
+                  minLength: 2
+                  maxLength: 120
+                phone:
+                  type: string
+                  maxLength: 30
+                  nullable: true
                 opd_unit_id:
                   type: integer
                   nullable: true
                 is_active:
                   type: boolean
+                password:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+                  nullable: true
       responses:
         '200':
           description: Pengguna diperbarui
@@ -1470,6 +1547,20 @@ paths:
       summary: "#40a Daftar unit kerja / OPD / Desa"
       security:
         - bearerAuth: []
+      parameters:
+        - in: query
+          name: level
+          schema:
+            $ref: '#/components/schemas/UnitLevel'
+        - in: query
+          name: is_active
+          schema:
+            type: boolean
+        - in: query
+          name: q
+          schema:
+            type: string
+            maxLength: 100
       responses:
         '200':
           description: Daftar unit kerja
@@ -1488,12 +1579,18 @@ paths:
               properties:
                 code:
                   type: string
+                  minLength: 2
+                  maxLength: 30
                 name:
                   type: string
+                  minLength: 2
+                  maxLength: 150
                 level:
                   $ref: '#/components/schemas/UnitLevel'
                 description:
                   type: string
+                  maxLength: 1000
+                  nullable: true
       responses:
         '201':
           description: Unit kerja ditambahkan
@@ -1518,8 +1615,12 @@ paths:
               properties:
                 name:
                   type: string
+                  minLength: 2
+                  maxLength: 150
                 description:
                   type: string
+                  maxLength: 1000
+                  nullable: true
                 is_active:
                   type: boolean
       responses:
@@ -1574,6 +1675,8 @@ paths:
                   maximum: 1000
                 recommend_secret:
                   type: boolean
+                is_active:
+                  type: boolean
       responses:
         '200':
           description: Parameter kategori diperbarui
@@ -1605,6 +1708,7 @@ paths:
                   enum: [district, village]
                 code:
                   type: string
+                  maxLength: 20
                 district_id:
                   type: integer
                 opd_unit_id:
@@ -1612,6 +1716,8 @@ paths:
                   nullable: true
                 name:
                   type: string
+                  minLength: 2
+                  maxLength: 120
                 village_type:
                   type: string
                   enum: [DESA, KELURAHAN]
@@ -1645,9 +1751,19 @@ paths:
               properties:
                 name:
                   type: string
+                  minLength: 2
+                  maxLength: 120
+                code:
+                  type: string
+                  maxLength: 20
+                district_id:
+                  type: integer
                 opd_unit_id:
                   type: integer
                   nullable: true
+                village_type:
+                  type: string
+                  enum: [DESA, KELURAHAN]
       responses:
         '200':
           description: Data wilayah diperbarui
@@ -1667,10 +1783,11 @@ paths:
           name: actor_role
           schema:
             type: string
+            enum: [WARGA, ADMIN_UNIT, PETUGAS, INSPEKTORAT, SUPER_ADMIN, SYSTEM]
         - in: query
           name: action_type
           schema:
-            type: string
+            $ref: '#/components/schemas/AuditActionType'
         - in: query
           name: from
           schema:
@@ -1685,6 +1802,7 @@ paths:
           name: page
           schema:
             type: integer
+            minimum: 1
       responses:
         '200':
           description: Daftar audit log baca-saja berpaginasi
